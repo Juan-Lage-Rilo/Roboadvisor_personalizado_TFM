@@ -1,0 +1,104 @@
+# ============================================================================
+# .gitignore — Roboadvisor-TFM
+# Cobertura: Python · data science · notebooks · entornos de IA · SO
+# ============================================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+build/
+dist/
+.eggs/
+pip-wheel-metadata/
+
+# ---------- Entornos virtuales ----------
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ---------- Jupyter ----------
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+.jupyter/
+
+# ---------- Test / type-check caches ----------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# ---------- Editores / IDEs ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------- Sistema operativo ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+__MACOSX/
+
+# ---------- Herramientas IA / agentes ----------
+.claude/
+.warp/
+.cursor/
+.aider*
+.continue/
+
+# ---------- Secretos y variables de entorno ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.yaml
+
+# ---------- Notas internas / artefactos de migración ----------
+AUDIT_REPORT.md
+migration_log.txt
+PROJECT_CONTEXT.md
+*.bak
+*.html.bak
+_archive_local/
+
+# ---------- Datos pesados (regla por defecto: ignorar todo en data/) ----------
+# El esqueleto de carpetas se preserva con .gitkeep
+data/**
+!data/**/.gitkeep
+!data/README.md
+
+# ---------- Outputs generados ----------
+# Mantén el esqueleto y descomenta para conservar artefactos canónicos puntuales.
+outputs/**
+!outputs/**/.gitkeep
+!outputs/README.md
+# Ejemplos de excepciones (descomenta si los quieres versionar):
+# !outputs/m2/*.pkl
+# !outputs/m2/selected_etfs.json
+# !outputs/m4/metrics_by_profile.json
+
+# ---------- Modelos / pesos ----------
+*.pkl
+*.joblib
+*.h5
+*.onnx
+*.pt
+*.bin
+*.safetensors
+
+# ---------- Logs ----------
+*.log
+logs/
