@@ -14,7 +14,7 @@
 
 Este proyecto implementa un **roboadvisor end-to-end** en Python que automatiza dos tareas centrales del asesoramiento financiero retail: (1) inferir el perfil de riesgo del inversor a partir del análisis de sentimiento de texto libre mediante FinBERT, y (2) construir y validar una cartera de ETFs globales optimizada con restricciones de volatilidad derivadas de ese perfil.
 
-El sistema procesa el lenguaje natural del usuario, lo traduce a un score de riesgo continuo (0–1) y lo utiliza como restricción de volatilidad máxima en un proceso de optimización Media-Varianza / HRP, backtestando los resultados contra benchmarks estándar (S&P 500, cartera 60/40).
+El sistema procesa el lenguaje natural del usuario, lo traduce a un perfil de riesgo (conservador / moderado / agresivo) con un cap de volatilidad anual asociado, evalúa varias candidatas de cartera (mínima varianza, máximo Sharpe, HRP y equal-weight) y selecciona automáticamente la de mayor Sharpe ex-ante sujeta al cap. Los resultados se backtestean contra benchmarks estándar (S&P 500 y cartera 60/40).
 
 **Dataset de entrenamiento/validación NLP:** Financial PhraseBank — 14.780 frases financieras etiquetadas (`positive`, `negative`, `neutral`) con cuatro niveles de acuerdo entre anotadores.
 
@@ -205,18 +205,17 @@ El sistema se organiza en cinco módulos con flujo de datos unidireccional:
 
 ## 📐 Metodología de Optimización (M3)
 
-Tres estrategias implementadas, seleccionables por el usuario o por perfil:
+Para cada perfil se evalúan **tres candidatas** de cartera y se selecciona automáticamente la que maximiza el Sharpe ex-ante sujeta al cap de volatilidad del perfil:
 
-| Estrategia | Referencia | Adecuada para |
-|---|---|---|
-| **Mínima Varianza** (Markowitz) | Markowitz (1952) | Perfil conservador — prioriza estabilidad |
-| **Máximo Sharpe** | Sharpe (1966) | Perfil moderado — equilibrio rentabilidad/riesgo |
-| **HRP** (Hierarchical Risk Parity) | López de Prado (2016) | Perfil agresivo — mayor diversificación robusta |
+| Perfil | Cap de vol. | Candidata principal | Candidata alternativa | Baseline |
+|---|---|---|---|---|
+| Conservador | 8 %  | Mínima Varianza (Markowitz, 1952) | Máximo Sharpe (Sharpe, 1966) | Equal-weight |
+| Moderado    | 15 % | Máximo Sharpe                       | HRP (López de Prado, 2016)    | Equal-weight |
+| Agresivo    | 25 % | HRP                                 | Máximo Sharpe                   | Equal-weight |
 
-La volatilidad máxima anualizada de cada cartera está **acotada por el score NLP de M1**:
-- Conservador (score ≤ 0.33): `max_vol = 8%`
-- Moderado (score ≤ 0.66): `max_vol = 15%`
-- Agresivo (score > 0.66): `max_vol = 20%`
+**Regla de selección:** se elige la cartera con mayor Sharpe ex-ante entre las que cumplen `vol_anual ≤ cap × 1,01`. La estimación de μ y Σ usa Ledoit-Wolf shrinkage (Ledoit & Wolf, 2004). Si todas las candidatas violan el cap, la cartera ganadora se mezcla linealmente con cash (rf anual = 2 %) hasta cumplirlo.
+
+El cap de volatilidad de cada perfil queda fijado por el perfilado de M1 (cuestionario MiFID II + análisis de sentimiento NLP), bajo el principio de **prudencia asimétrica**: la señal NLP solo puede *rebajar* el perfil de riesgo, nunca elevarlo.
 
 ---
 
@@ -241,23 +240,23 @@ Métricas reportadas vs. benchmarks (S&P 500 / cartera 60/40):
 
 ## 📈 Resultados
 
-> ⚠️ Los resultados cuantitativos se completarán al finalizar los módulos M3 y M4.
+Backtest OOS 2020-01-02 → 2026-04-30, pesos *OOS-clean* (μ y Σ estimados solo con datos ≤ 2019-12-31), rebalanceo trimestral, rf anual = 2 %. En este universo y ventana, la regla de selección elige **Máximo Sharpe** para los tres perfiles (ver § Metodología de Optimización).
 
-| Perfil | Estrategia | CAGR | Sharpe | Max Drawdown |
+| Perfil | Estrategia seleccionada | CAGR | Sharpe | Max Drawdown |
 |---|---|---|---|---|
-| Conservador | Mínima Varianza | [TODO] | [TODO] | [TODO] |
-| Moderado | Máximo Sharpe | [TODO] | [TODO] | [TODO] |
-| Agresivo | HRP | [TODO] | [TODO] | [TODO] |
-| *Benchmark S&P 500* | *Buy & Hold* | [TODO] | [TODO] | [TODO] |
-| *Benchmark 60/40* | *Buy & Hold* | [TODO] | [TODO] | [TODO] |
+| Conservador | Máximo Sharpe | −1,60 % | −0,55 | −22,20 % |
+| Moderado | Máximo Sharpe | +4,18 % | 0,26 | −28,20 % |
+| Agresivo | Máximo Sharpe | +16,20 % | 0,80 | −31,78 % |
+| *Benchmark S&P 500* | *Buy & Hold* | +15,05 % | 0,69 | −33,72 % |
+| *Benchmark 60/40* | *Buy & Hold* | +8,26 % | 0,58 | −22,26 % |
 
-**Precisión del modelo NLP (M1)** sobre Financial PhraseBank (`all_agree`):
+**Precisión del modelo NLP (M1)** sobre Financial PhraseBank (subconjunto `allagree`, n = 2.264), zero-shot con FinBERT:
 
 | Métrica | Valor |
 |---|---|
-| Accuracy | [TODO] |
-| F1-Score (macro) | [TODO] |
-| Clases evaluadas | positive / negative / neutral |
+| Accuracy | 0,9717 |
+| F1-Score (macro) | 0,9625 |
+| Clases evaluadas | negative / neutral / positive |
 
 ---
 
@@ -265,6 +264,7 @@ Métricas reportadas vs. benchmarks (S&P 500 / cartera 60/40):
 
 - Markowitz, H. (1952). *Portfolio Selection*. Journal of Finance, 7(1), 77–91.
 - Sharpe, W. F. (1966). *Mutual Fund Performance*. Journal of Business, 39(1), 119–138.
+- Ledoit, O. & Wolf, M. (2004). *Honey, I Shrunk the Sample Covariance Matrix*. Journal of Portfolio Management, 30(4), 110–119.
 - López de Prado, M. (2016). *Building Diversified Portfolios that Outperform Out-of-Sample*. Journal of Portfolio Management, 42(4).
 - Yang, Y. et al. (2020). *FinBERT: A Pretrained Language Model for Financial Communications*. arXiv:2006.08097.
 - Malo, P. et al. (2014). *Good Debt or Bad Debt: Detecting Semantic Orientations in Economic Texts*. JASIST (Financial PhraseBank).
