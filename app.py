@@ -1,30 +1,38 @@
 """
 Demo M5 — Roboadvisor TFM (Streamlit Cloud)
 ===========================================
-Interfaz de la demo del módulo M1 (perfilado del inversor) por INFERENCIA
-REMOTA. La app NO carga modelos en local: delega en la HuggingFace Inference
-API a través de :class:`src.m1_remote_profiling.RemoteProfiler` (Rama A:
-Opus-MT ES→EN → FinBERT).
+Interfaz del módulo M1 (perfilado del inversor) mediante el **cuestionario
+MiFID II Plantilla C** documentado en ``docs/mifid/``: 12 preguntas cerradas
+(bloques B1–B4) + 3 abiertas (B5, análisis de sentimiento NLP), con pesos
+adaptativos por horizonte y regla de suelo.
 
-El token HF se lee de ``st.secrets["HF_TOKEN"]`` — nunca se hardcodea.
+La inferencia NLP es REMOTA (HuggingFace Inference API, Opus-MT ES→EN →
+FinBERT): la app no carga modelos en local. El token HF se lee de
+``st.secrets["HF_TOKEN"]`` — nunca se hardcodea.
 """
 from __future__ import annotations
 
 import streamlit as st
 
+from src.m1_mifid_questionnaire import (
+    OPEN_QUESTIONS,
+    QUESTIONNAIRE,
+    score_mifid,
+)
 from src.m1_remote_profiling import RemoteProfiler, get_hf_token
 
 st.set_page_config(
-    page_title="Roboadvisor TFM — Demo M1",
-    page_icon=":chart_with_upwards_trend:",
+    page_title="Roboadvisor TFM — Perfilado MiFID",
+    page_icon="🧭",
     layout="wide",
 )
 
-st.title("Roboadvisor TFM — Perfilado del inversor (M1)")
-st.caption(
-    "Demo M5 · Inferencia remota vía HuggingFace Inference API "
-    "(Opus-MT ES→EN → FinBERT). Sin modelos en local."
-)
+# --- Color por perfil (para tarjetas de resultado) -------------------------
+_PERFIL_COLOR = {
+    "Conservador": "#2E7D32",
+    "Moderado": "#F9A825",
+    "Agresivo": "#C62828",
+}
 
 
 @st.cache_resource(show_spinner=False)
@@ -32,6 +40,15 @@ def _get_profiler() -> RemoteProfiler:
     """Crea (y cachea) el perfilador remoto. Requiere HF_TOKEN configurado."""
     return RemoteProfiler()
 
+
+# ===========================================================================
+# Cabecera
+# ===========================================================================
+st.title("🧭 Roboadvisor TFM — Perfilado del inversor (M1)")
+st.caption(
+    "Cuestionario MiFID II · **Plantilla C** (pesos adaptativos por horizonte + "
+    "regla de suelo). Análisis de sentimiento remoto: Opus-MT ES→EN → FinBERT."
+)
 
 # --- Aviso temprano si falta el token --------------------------------------
 if not get_hf_token():
@@ -43,85 +60,114 @@ if not get_hf_token():
     st.stop()
 
 
-# --- Formulario ------------------------------------------------------------
-with st.form("perfilado"):
-    col_q, col_t = st.columns([1, 2])
+# ===========================================================================
+# Formulario — cuestionario completo
+# ===========================================================================
+with st.form("cuestionario_mifid"):
+    closed: dict[str, int] = {}
 
-    with col_q:
-        q_score_raw = st.slider(
-            "Puntuación del cuestionario MiFID II (0–100)",
-            min_value=0.0,
-            max_value=100.0,
-            value=50.0,
-            step=1.0,
-            help="Resultado agregado del cuestionario cerrado (Rama A del flujo M1).",
-        )
+    for block_id, block in QUESTIONNAIRE.items():
+        st.subheader(f"{block_id} · {block['titulo']}")
+        st.caption(block["norma"])
+        for q in block["questions"]:
+            label = st.radio(
+                q.text,
+                options=q.labels,
+                index=0,
+                help=q.help or None,
+                key=q.key,
+            )
+            closed[q.key] = q.points_for(label)
+        st.divider()
 
-    with col_t:
-        texto_libre_es = st.text_area(
-            "Respuesta abierta del inversor (en castellano)",
-            value="",
-            height=160,
-            placeholder=(
-                "Ej.: No me gusta perder dinero. Prefiero rentabilidades modestas "
-                "pero seguras..."
-            ),
+    st.subheader("B5 · Análisis de sentimiento (respuestas abiertas)")
+    st.caption(
+        "Tres preguntas abiertas, cada una procesada con FinBERT vía API. "
+        "Déjalas en blanco para tratarlas como neutrales."
+    )
+    textos: list[str] = []
+    for oq in OPEN_QUESTIONS:
+        textos.append(
+            st.text_area(oq.text, value="", height=90, placeholder=oq.placeholder, key=oq.key)
         )
 
     enviado = st.form_submit_button("Calcular perfil", type="primary")
 
 
-# --- Inferencia y resultados ----------------------------------------------
+# ===========================================================================
+# Inferencia y resultados
+# ===========================================================================
 if enviado:
-    if not texto_libre_es.strip():
-        st.warning("Introduce una respuesta abierta para analizar el sentimiento.")
-        st.stop()
-
-    with st.spinner("Consultando la HuggingFace Inference API…"):
+    with st.spinner("Analizando respuestas abiertas con la HuggingFace Inference API…"):
         try:
-            result = _get_profiler().profile_investor(texto_libre_es, q_score_raw)
+            profiler = _get_profiler()
+            nlp_scores = [profiler.nlp_proxy_score_es(t) for t in textos]
+            result = score_mifid(closed, nlp_scores)
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Error en la inferencia remota: {exc}")
+            st.error(f"Error en el perfilado: {exc}")
             st.stop()
 
     st.subheader("Resultado del perfilado")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Perfil base", result.perfil_base.capitalize())
-    c2.metric(
-        "Perfil final",
-        result.perfil_final.capitalize(),
-        delta=(
-            f"-{result.escalones_bajados} escalón(es)"
-            if result.escalones_bajados
-            else "sin cambio"
-        ),
-        delta_color="inverse",
+    color = _PERFIL_COLOR.get(result.perfil, "#455A64")
+    st.markdown(
+        f"""
+        <div style="background:{color};padding:18px 22px;border-radius:12px;
+                    color:white;margin-bottom:10px;">
+            <div style="font-size:0.9rem;opacity:0.85;">PERFIL DE RIESGO</div>
+            <div style="font-size:2rem;font-weight:700;">{result.perfil}</div>
+            <div style="font-size:1rem;opacity:0.9;">
+                Volatilidad máxima anual (M3): {result.sigma_max:.0%}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    c3.metric("Vol. máx. anual (M3)", f"{result.volatility_cap:.0%}")
 
-    if result.flag_revisar:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Score final", f"{result.score_final:.3f}", help="Rango [0, 1].")
+    c2.metric("Bloque NLP (B5)", f"{result.s5:.2f}")
+    c3.metric(
+        "Regla de suelo",
+        "Activa" if result.floor_rule_activa else "No activa",
+    )
+
+    if result.floor_rule_activa:
         st.warning(
-            "⚠️ Divergencia leve detectada entre cuestionario y texto libre. "
-            "Se recomienda revisión manual (no se baja el perfil)."
+            "⚠️ **Regla de suelo activada**: tu capacidad económica declarada "
+            "(impacto grave de una pérdida o endeudamiento alto) fija el perfil "
+            "en **Conservador** con independencia del score numérico. Es una "
+            "salvaguarda regulatoria (Directrices ESMA)."
         )
 
-    with st.expander("Detalle / trazabilidad"):
-        st.json(
+    # --- Desglose por bloques ----------------------------------------------
+    with st.expander("¿Por qué este perfil? — desglose por bloques", expanded=True):
+        pesos = result.pesos_horizonte
+        st.markdown("**Score = Σ pesoᵢ(horizonte) · Sᵢ**")
+        st.table(
             {
-                "q_score_raw": result.q_score_raw,
-                "q_norm": result.q_norm,
-                "sentiment_score": result.sentiment_score,
-                "confidence": result.confidence,
-                "divergencia": result.divergencia,
-                "escalones_bajados": result.escalones_bajados,
-                "flag_revisar": result.flag_revisar,
-                "traduccion_en": result.texto_en,
+                "Bloque": [
+                    "B1 · Conocimientos",
+                    "B2 · Situación financiera",
+                    "B3 · Objetivos",
+                    "B4 · ESG",
+                    "B5 · NLP (sentimiento)",
+                ],
+                "Score (Sᵢ)": [result.s1, result.s2, result.s3, result.s4, result.s5],
+                "Peso": [f"{w:.0%}" for w in pesos],
+                "Aportación": [
+                    round(pesos[i] * s, 3)
+                    for i, s in enumerate(
+                        [result.s1, result.s2, result.s3, result.s4, result.s5]
+                    )
+                ],
             }
         )
         st.caption(
-            "Nota demo: sin Rama B (RoBERTuito no soportado por hf-inference), la "
-            "confianza se deriva de la probabilidad del top-label de FinBERT "
-            "(umbrales 0.80/0.60). La lógica de fusión (prudencia asimétrica) es "
-            "idéntica a la del notebook M1."
+            "Los pesos cambian según el horizonte temporal (P8). El NLP (B5) "
+            "es la media de las 3 respuestas abiertas (positivo=1.0 · "
+            "neutral=0.5 · negativo=0.0)."
         )
+
+    with st.expander("Detalle / trazabilidad (JSON)"):
+        st.json(result.as_dict())

@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional, Sequence
 
 from huggingface_hub import InferenceClient
 
@@ -255,6 +255,31 @@ class RemoteProfiler:
             logger.error("score_finbert error: %s", exc)
             return 0.0, 0.0
 
+    def nlp_proxy_score_es(self, text_es: str) -> float:
+        """Traduce ES→EN y devuelve el score NLP de Plantilla C: 1.0/0.5/0.0.
+
+        Mapea el top-label de FinBERT a {positivo→1.0, neutral→0.5,
+        negativo→0.0}, exactamente como el proxy ``p1{3,4,5}_finbert`` del
+        dataset de personas sintéticas (ver ``generate_personas.py``). Es el
+        valor que consume el bloque B5 de
+        :func:`src.m1_mifid_questionnaire.score_mifid`.
+
+        Si el texto está vacío o la API falla, devuelve ``0.5`` (neutral) para
+        no sesgar el bloque hacia ningún extremo.
+        """
+        if not (text_es or "").strip():
+            return 0.5
+        text_en = self.translate_es_to_en(text_es)
+        try:
+            out = self._client.text_classification(
+                text_en, model=self.sentiment_model_id
+            )
+            label = str(out[0]["label"]).lower()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("nlp_proxy_score_es error: %s", exc)
+            return 0.5
+        return {"positive": 1.0, "neutral": 0.5, "negative": 0.0}.get(label, 0.5)
+
     @staticmethod
     def _confidence_from_prob(prob: float) -> str:
         """Deriva la confianza de la probabilidad del top-label de FinBERT.
@@ -309,3 +334,32 @@ class RemoteProfiler:
             q_score_raw=q_score_raw,
             texto_en=texto_en,
         )
+
+    # --- Pipeline Plantilla C (cuestionario MiFID completo) -------------
+    def profile_investor_mifid(
+        self,
+        closed: "Mapping[str, int]",
+        textos_abiertos: "Sequence[str]",
+    ):
+        """Perfilado por el modelo **Plantilla C** (cuestionario MiFID completo).
+
+        Combina las 12 respuestas cerradas (``p1``…``p12``) con el bloque B5
+        de análisis de sentimiento: cada texto abierto se puntúa con
+        :meth:`nlp_proxy_score_es` (1.0/0.5/0.0) y su media alimenta a
+        :func:`src.m1_mifid_questionnaire.score_mifid`.
+
+        Parameters
+        ----------
+        closed
+            Puntos crudos de las 12 preguntas cerradas.
+        textos_abiertos
+            Respuestas libres P13–P15 en castellano.
+
+        Returns
+        -------
+        src.m1_mifid_questionnaire.MiFIDResult
+        """
+        from src.m1_mifid_questionnaire import score_mifid
+
+        nlp_scores = [self.nlp_proxy_score_es(t) for t in textos_abiertos]
+        return score_mifid(closed, nlp_scores)
