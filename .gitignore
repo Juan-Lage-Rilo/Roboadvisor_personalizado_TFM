@@ -65,7 +65,8 @@ __MACOSX/
 *.key
 credentials.json
 secrets.yaml
-.streamlit/secrets.toml          # token HF para la demo M5 (Streamlit) — NUNCA subir
+# token HF para la demo M5 (Streamlit) — NUNCA subir
+.streamlit/secrets.toml
 
 # ---------- Notas internas / artefactos de migración ----------
 AUDIT_REPORT.md
