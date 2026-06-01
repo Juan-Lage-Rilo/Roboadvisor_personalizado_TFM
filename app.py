@@ -138,12 +138,43 @@ html, body, [class*="css"], .stMarkdown, p, li, span, label {
     color: var(--gold) !important;
 }
 
-/* Captions y etiquetas */
+/* Captions y etiquetas claras (sobre fondo negro) */
 [data-testid="stCaptionContainer"], .stCaption { color: var(--muted) !important; }
-[data-testid="stWidgetLabel"] label, .stRadio label, .stRadio p { color: var(--ivory) !important; }
+[data-testid="stTextArea"] [data-testid="stWidgetLabel"] label { color: var(--ivory) !important; }
 
 /* Divisores finos */
 hr { border-color: var(--line) !important; }
+
+/* ---------- Preguntas en tarjeta blanca ---------- */
+[data-testid="stRadio"] {
+    background: #FFFFFF;
+    border: 1px solid var(--gold);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+}
+/* todo el texto de la tarjeta en tinta */
+[data-testid="stRadio"] [data-testid="stWidgetLabel"] label,
+[data-testid="stRadio"] label,
+[data-testid="stRadio"] p,
+[data-testid="stRadio"] div {
+    color: #111111 !important;
+}
+
+/* Botón de radio: dorado con punto interior negro + sombra negra al marcar */
+[data-baseweb="radio"] input:checked + div {
+    background-color: var(--gold) !important;
+    border-color: #000000 !important;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.40) !important;
+}
+[data-baseweb="radio"] input:checked + div > div {
+    background-color: #000000 !important;   /* punto interior negro */
+}
+/* círculo sin marcar, visible sobre blanco */
+[data-baseweb="radio"] input:not(:checked) + div {
+    background-color: #FFFFFF !important;
+    border-color: #B7B0A0 !important;
+}
 
 /* Botón: oro sobre negro */
 .stButton > button, .stFormSubmitButton > button {
@@ -170,8 +201,8 @@ hr { border-color: var(--line) !important; }
 }
 .stTextArea textarea:focus { border-color: var(--gold) !important; box-shadow: none !important; }
 
-/* Radios */
-[data-testid="stForm"] { border: 1px solid var(--line); border-radius: 6px; }
+/* Formulario sin recuadro propio (las tarjetas dan la estructura) */
+[data-testid="stForm"] { border: none; padding: 0; }
 
 /* Métricas */
 [data-testid="stMetricValue"] {
