@@ -83,38 +83,52 @@ _CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@300;400;500;600&display=swap');
 
 :root {
-    --ink:    #111111;
-    --gold:   #D6AD5B;
-    --gold-d: #B8924A;
-    --ivory:  #EDE7DA;
-    --muted:  #9A958B;
-    --line:   #2A2A2A;
-    --panel:  #121212;
+    --ink:    #1A1A1A;
+    --gold:   #B8924A;
+    --gold-l: #D6AD5B;
+    --muted:  #6F6A60;
+    --line:   #E7E2D6;
 }
 
-/* Fondo negro mate en toda la app */
+/* Negro solo como margen alrededor del panel */
 .stApp,
 [data-testid="stAppViewContainer"],
 [data-testid="stHeader"] {
     background: #000000 !important;
 }
 
-/* Tipografía + color de texto claro por defecto */
-html, body, [class*="css"], .stMarkdown, p, li, span, label {
-    font-family: 'Inter', -apple-system, sans-serif;
-    color: var(--ivory);
+/* ---------- GRAN RECUADRO BLANCO: todo el contenido vive aquí ---------- */
+.block-container {
+    max-width: 900px;
+    background: #FFFFFF;
+    border-radius: 16px;
+    padding: 2.8rem 3.2rem 3.2rem;
+    margin-top: 2.2rem;
+    margin-bottom: 2.2rem;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
 }
 
-.block-container { max-width: 820px; padding-top: 2rem; }
+/* Tipografía + texto oscuro por defecto (todo va sobre blanco) */
+html, body, [class*="css"], .stMarkdown, p, li, span, label {
+    font-family: 'Inter', -apple-system, sans-serif;
+    color: var(--ink);
+}
 
-/* ---------- Cabecera de marca ---------- */
+/* ---------- Cabecera de marca (dentro del panel blanco) ---------- */
 .brand-bar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 1.4rem;
+    margin-bottom: 1.6rem;
 }
-.brand-left { display: flex; align-items: center; }
+/* Chapa negra para que el logo conserve su fondo mate sobre el blanco */
+.logo-badge {
+    background: #000000;
+    border-radius: 10px;
+    padding: 7px 9px;
+    display: inline-flex;
+    align-items: center;
+}
 .brand-name {
     font-family: 'Cormorant Garamond', Georgia, serif;
     font-size: 1.9rem;
@@ -122,111 +136,84 @@ html, body, [class*="css"], .stMarkdown, p, li, span, label {
     letter-spacing: 1px;
     color: var(--gold);
 }
-.brand-name .ia { color: #FFFFFF; font-weight: 700; }
+.brand-name .ia { color: var(--ink); font-weight: 700; }
 
-/* Título dentro de recuadro blanco para legibilidad */
-.title-box {
-    display: inline-block;
-    background: #FFFFFF;
-    color: #111111;
-    padding: 14px 22px;
-    border-radius: 4px;
-    border: 1px solid var(--gold);
-}
-.title-box .app-title {
+/* Título principal (sobre el blanco, sin recuadro adicional) */
+.app-title {
     font-family: 'Cormorant Garamond', Georgia, serif;
     font-weight: 600;
-    font-size: 2.1rem;
+    font-size: 2.5rem;
     line-height: 1.1;
     letter-spacing: 0.3px;
-    color: #111111;
-    margin: 0;
+    color: var(--ink);
+    margin: 0.2rem 0 0;
 }
 .app-rule {
     width: 56px; height: 2px; background: var(--gold);
-    margin: 1rem 0 2rem 0; border: none;
+    margin: 0.9rem 0 2rem 0; border: none;
 }
 
-/* Títulos de apartado (subheaders) en oro */
+/* Títulos de apartado en tinta serif */
 [data-testid="stSubheader"], h2, h3 {
     font-family: 'Cormorant Garamond', Georgia, serif !important;
     font-weight: 600 !important;
     letter-spacing: 0.2px;
-    color: var(--gold) !important;
+    color: var(--ink) !important;
 }
 
-/* Captions y etiquetas claras (sobre fondo negro) */
+/* Captions */
 [data-testid="stCaptionContainer"], .stCaption { color: var(--muted) !important; }
-[data-testid="stTextArea"] [data-testid="stWidgetLabel"] label { color: var(--ivory) !important; }
 
 /* Divisores finos */
 hr { border-color: var(--line) !important; }
 
-/* ---------- Preguntas en tarjeta blanca ---------- */
-[data-testid="stRadio"] {
-    background: #FFFFFF;
-    border: 1px solid var(--gold);
-    border-radius: 8px;
-    padding: 18px 24px;
-    margin-bottom: 14px;
+/* ---------- Radios: SOLO texto oscuro; el control queda intacto ---------- */
+/* Texto de la pregunta y de las opciones (targetea <p>, nunca el círculo) */
+[data-testid="stRadio"] [data-testid="stWidgetLabel"] p,
+[data-testid="stRadio"] [role="radiogroup"] label p {
+    color: var(--ink) !important;
 }
-/* todo el texto de la tarjeta en tinta y legible (pregunta + opciones) */
-[data-testid="stRadio"] [data-testid="stWidgetLabel"] *,
-[data-testid="stRadio"] label,
-[data-testid="stRadio"] p,
-[data-testid="stRadio"] div {
-    color: #111111 !important;
-    background: transparent !important;
-}
-/* separación cómoda entre opciones */
-[data-testid="stRadio"] [role="radiogroup"] > label { margin: 2px 0; }
+[data-testid="stRadio"] [role="radiogroup"] > label { margin: 3px 0; }
+/* Círculo seleccionado en DORADO (no rojo), sin afectar al texto */
+[data-testid="stRadio"] input[type="radio"] { accent-color: var(--gold); }
+[data-testid="stRadio"] [data-baseweb="radio"] svg { fill: var(--gold); }
+[data-testid="stRadio"] [data-baseweb="radio"] svg circle { fill: var(--gold); }
 
-/* Círculo del radio en DORADO (no rojo). Solo afecta al control, nunca al
-   texto: usamos accent-color (nativo) y el relleno del SVG/marca de BaseWeb. */
-[data-testid="stRadio"] input[type="radio"] { accent-color: #D6AD5B !important; }
-[data-testid="stRadio"] [data-baseweb="radio"] svg { fill: #D6AD5B !important; }
-[data-testid="stRadio"] [data-baseweb="radio"] svg circle { fill: #D6AD5B !important; }
-
-/* Botón: oro sobre negro */
+/* Botón en dorado */
 .stButton > button, .stFormSubmitButton > button {
     background: var(--gold);
-    color: #000000;
+    color: #FFFFFF;
     border: 1px solid var(--gold);
-    border-radius: 2px;
-    padding: 0.55rem 1.6rem;
+    border-radius: 3px;
+    padding: 0.55rem 1.7rem;
     font-weight: 600;
     letter-spacing: 0.4px;
     transition: all .18s ease;
 }
 .stButton > button:hover, .stFormSubmitButton > button:hover {
-    background: transparent;
+    background: #FFFFFF;
     color: var(--gold);
 }
 
-/* Inputs sobre fondo oscuro */
+/* Inputs (preguntas abiertas) sobre blanco */
 .stTextArea textarea {
-    border-radius: 2px !important;
+    border-radius: 3px !important;
     border: 1px solid var(--line) !important;
-    background: var(--panel) !important;
-    color: var(--ivory) !important;
+    background: #FFFFFF !important;
+    color: var(--ink) !important;
 }
 .stTextArea textarea:focus { border-color: var(--gold) !important; box-shadow: none !important; }
 
-/* Formulario sin recuadro propio (las tarjetas dan la estructura) */
+/* Formulario sin recuadro propio */
 [data-testid="stForm"] { border: none; padding: 0; }
 
 /* Métricas */
 [data-testid="stMetricValue"] {
     font-family: 'Cormorant Garamond', Georgia, serif;
     font-weight: 600;
-    color: var(--ivory);
+    color: var(--ink);
 }
 [data-testid="stMetricLabel"] { color: var(--muted) !important; }
-
-/* Tablas legibles sobre negro */
-table { color: var(--ivory) !important; }
-thead th { color: var(--gold) !important; border-color: var(--line) !important; }
-tbody td, tbody th { border-color: var(--line) !important; }
 
 /* Ocultar cromo de Streamlit */
 #MainMenu, footer, [data-testid="stToolbar"] { visibility: hidden; }
@@ -254,12 +241,10 @@ def _get_profiler() -> RemoteProfiler:
 st.markdown(
     f"""
     <div class="brand-bar">
-        <div class="brand-left">{_LOGO_SVG}</div>
+        <div class="logo-badge">{_LOGO_SVG}</div>
         <div class="brand-name">Invest<span class="ia">IA</span></div>
     </div>
-    <div class="title-box">
-        <div class="app-title">Test MiFID II · Perfilado del inversor</div>
-    </div>
+    <div class="app-title">Test MiFID II · Perfilado del inversor</div>
     <hr class="app-rule">
     """,
     unsafe_allow_html=True,
