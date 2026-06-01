@@ -14,6 +14,23 @@ primera respuesta.
 La inferencia NLP es REMOTA (HuggingFace Inference API, Opus-MT ES→EN →
 FinBERT): la app no carga modelos en local. El token HF se lee de
 ``st.secrets["HF_TOKEN"]`` — nunca se hardcodea.
+
+Tema / estética
+---------------
+Todo el aspecto (fondo negro, logo, marca, tarjetas blancas, tipografía) se
+aplica por CSS dentro de este archivo. El **color del círculo del radio
+seleccionado** lo dibuja BaseWeb a partir del ``primaryColor`` del tema de
+Streamlit; el CSS intenta teñirlo de dorado, pero si tu versión lo ignora,
+crea ``.streamlit/config.toml`` en la raíz del repo con::
+
+    [theme]
+    primaryColor = "#D6AD5B"
+    backgroundColor = "#000000"
+    secondaryBackgroundColor = "#121212"
+    textColor = "#EDE7DA"
+
+(``config.toml`` SÍ se commitea; solo ``.streamlit/secrets.toml`` va en
+``.gitignore``.)
 """
 from __future__ import annotations
 
@@ -149,32 +166,26 @@ hr { border-color: var(--line) !important; }
 [data-testid="stRadio"] {
     background: #FFFFFF;
     border: 1px solid var(--gold);
-    border-radius: 6px;
-    padding: 14px 18px;
-    margin-bottom: 12px;
+    border-radius: 8px;
+    padding: 18px 24px;
+    margin-bottom: 14px;
 }
-/* todo el texto de la tarjeta en tinta */
-[data-testid="stRadio"] [data-testid="stWidgetLabel"] label,
+/* todo el texto de la tarjeta en tinta y legible (pregunta + opciones) */
+[data-testid="stRadio"] [data-testid="stWidgetLabel"] *,
 [data-testid="stRadio"] label,
 [data-testid="stRadio"] p,
 [data-testid="stRadio"] div {
     color: #111111 !important;
+    background: transparent !important;
 }
+/* separación cómoda entre opciones */
+[data-testid="stRadio"] [role="radiogroup"] > label { margin: 2px 0; }
 
-/* Botón de radio: dorado con punto interior negro + sombra negra al marcar */
-[data-baseweb="radio"] input:checked + div {
-    background-color: var(--gold) !important;
-    border-color: #000000 !important;
-    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.40) !important;
-}
-[data-baseweb="radio"] input:checked + div > div {
-    background-color: #000000 !important;   /* punto interior negro */
-}
-/* círculo sin marcar, visible sobre blanco */
-[data-baseweb="radio"] input:not(:checked) + div {
-    background-color: #FFFFFF !important;
-    border-color: #B7B0A0 !important;
-}
+/* Círculo del radio en DORADO (no rojo). Solo afecta al control, nunca al
+   texto: usamos accent-color (nativo) y el relleno del SVG/marca de BaseWeb. */
+[data-testid="stRadio"] input[type="radio"] { accent-color: #D6AD5B !important; }
+[data-testid="stRadio"] [data-baseweb="radio"] svg { fill: #D6AD5B !important; }
+[data-testid="stRadio"] [data-baseweb="radio"] svg circle { fill: #D6AD5B !important; }
 
 /* Botón: oro sobre negro */
 .stButton > button, .stFormSubmitButton > button {
