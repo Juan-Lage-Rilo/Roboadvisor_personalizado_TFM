@@ -36,6 +36,29 @@ st.set_page_config(
 
 # ===========================================================================
 # Estética — fintech minimalista / lujo (tinta + dorado sobre marfil)
+# --- Logo (SVG generado a partir del JSON de marca) ------------------------
+# Monograma "I" en oro champán inspirado en una vela japonesa: cuerpo con
+# remates tipo serif, mecha vertical que sobresale arriba/abajo y barras
+# internas (huecos negros) que evocan columnas de candlestick. Flat vector,
+# sin gradientes ni 3D, sobre negro mate.
+_LOGO_SVG = """
+<svg width="46" height="46" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-label="InvestIA logo">
+  <!-- mecha de la vela (sobresale arriba y abajo) -->
+  <rect x="49" y="8"  width="2" height="84" fill="#D6AD5B"/>
+  <!-- remate superior -->
+  <rect x="31" y="17" width="38" height="7" fill="#D6AD5B"/>
+  <!-- remate inferior -->
+  <rect x="31" y="76" width="38" height="7" fill="#D6AD5B"/>
+  <!-- cuerpo vertical de la I -->
+  <rect x="37" y="24" width="26" height="52" fill="#D6AD5B"/>
+  <!-- barras internas tipo candlestick (huecos sobre negro) -->
+  <rect x="42.5" y="24" width="2.2" height="52" fill="#000000"/>
+  <rect x="49"   y="24" width="2.2" height="52" fill="#000000"/>
+  <rect x="55.5" y="24" width="2.2" height="52" fill="#000000"/>
+</svg>
+"""
+
 # ===========================================================================
 # NOTA: cadena normal (no f-string) para no tener que escapar las llaves CSS.
 _CSS = """
@@ -43,83 +66,127 @@ _CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@300;400;500;600&display=swap');
 
 :root {
-    --ink:    #1A1A1A;
-    --muted:  #6F6A60;
-    --gold:   #B8924A;
-    --gold-d: #9A7A38;
-    --line:   #E7E2D6;
-    --ivory:  #FAF8F3;
+    --ink:    #111111;
+    --gold:   #D6AD5B;
+    --gold-d: #B8924A;
+    --ivory:  #EDE7DA;
+    --muted:  #9A958B;
+    --line:   #2A2A2A;
+    --panel:  #121212;
 }
 
-/* Tipografía base */
-html, body, [class*="css"], .stMarkdown, .stTextArea, .stRadio {
+/* Fondo negro mate en toda la app */
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stHeader"] {
+    background: #000000 !important;
+}
+
+/* Tipografía + color de texto claro por defecto */
+html, body, [class*="css"], .stMarkdown, p, li, span, label {
     font-family: 'Inter', -apple-system, sans-serif;
-    color: var(--ink);
+    color: var(--ivory);
 }
 
-/* Ancho de contenido un poco más generoso y centrado */
-.block-container { max-width: 820px; padding-top: 2.4rem; }
+.block-container { max-width: 820px; padding-top: 2rem; }
 
-/* Cabecera de la app */
-.app-title {
+/* ---------- Cabecera de marca ---------- */
+.brand-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1.4rem;
+}
+.brand-left { display: flex; align-items: center; }
+.brand-name {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 1.9rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: var(--gold);
+}
+.brand-name .ia { color: #FFFFFF; font-weight: 700; }
+
+/* Título dentro de recuadro blanco para legibilidad */
+.title-box {
+    display: inline-block;
+    background: #FFFFFF;
+    color: #111111;
+    padding: 14px 22px;
+    border-radius: 4px;
+    border: 1px solid var(--gold);
+}
+.title-box .app-title {
     font-family: 'Cormorant Garamond', Georgia, serif;
     font-weight: 600;
-    font-size: 2.7rem;
+    font-size: 2.1rem;
     line-height: 1.1;
     letter-spacing: 0.3px;
-    margin: 0 0 0.35rem 0;
+    color: #111111;
+    margin: 0;
 }
 .app-rule {
     width: 56px; height: 2px; background: var(--gold);
-    margin: 0.2rem 0 2.2rem 0; border: none;
+    margin: 1rem 0 2rem 0; border: none;
 }
 
-/* Títulos de apartado (subheaders) */
-.stSubheader, h2, h3 {
+/* Títulos de apartado (subheaders) en oro */
+[data-testid="stSubheader"], h2, h3 {
     font-family: 'Cormorant Garamond', Georgia, serif !important;
     font-weight: 600 !important;
     letter-spacing: 0.2px;
-    color: var(--ink) !important;
+    color: var(--gold) !important;
 }
 
-/* Etiquetas / captions */
-.stCaption, [data-testid="stCaptionContainer"] { color: var(--muted) !important; }
+/* Captions y etiquetas */
+[data-testid="stCaptionContainer"], .stCaption { color: var(--muted) !important; }
+[data-testid="stWidgetLabel"] label, .stRadio label, .stRadio p { color: var(--ivory) !important; }
 
 /* Divisores finos */
 hr { border-color: var(--line) !important; }
 
-/* Botón primario en dorado */
+/* Botón: oro sobre negro */
 .stButton > button, .stFormSubmitButton > button {
-    background: var(--ink);
-    color: #FFFFFF;
-    border: 1px solid var(--ink);
+    background: var(--gold);
+    color: #000000;
+    border: 1px solid var(--gold);
     border-radius: 2px;
     padding: 0.55rem 1.6rem;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.4px;
     transition: all .18s ease;
 }
 .stButton > button:hover, .stFormSubmitButton > button:hover {
-    background: var(--gold);
-    border-color: var(--gold);
-    color: #FFFFFF;
+    background: transparent;
+    color: var(--gold);
 }
 
-/* Inputs sobrios */
+/* Inputs sobre fondo oscuro */
 .stTextArea textarea {
     border-radius: 2px !important;
     border: 1px solid var(--line) !important;
-    background: var(--ivory) !important;
+    background: var(--panel) !important;
+    color: var(--ivory) !important;
 }
 .stTextArea textarea:focus { border-color: var(--gold) !important; box-shadow: none !important; }
+
+/* Radios */
+[data-testid="stForm"] { border: 1px solid var(--line); border-radius: 6px; }
 
 /* Métricas */
 [data-testid="stMetricValue"] {
     font-family: 'Cormorant Garamond', Georgia, serif;
     font-weight: 600;
+    color: var(--ivory);
 }
+[data-testid="stMetricLabel"] { color: var(--muted) !important; }
 
-/* Ocultar cromo de Streamlit para un look más limpio */
+/* Tablas legibles sobre negro */
+table { color: var(--ivory) !important; }
+thead th { color: var(--gold) !important; border-color: var(--line) !important; }
+tbody td, tbody th { border-color: var(--line) !important; }
+
+/* Ocultar cromo de Streamlit */
 #MainMenu, footer, [data-testid="stToolbar"] { visibility: hidden; }
 </style>
 """
@@ -143,8 +210,16 @@ def _get_profiler() -> RemoteProfiler:
 # Cabecera  (cambio 1: título único, sin subtítulo)
 # ===========================================================================
 st.markdown(
-    '<div class="app-title">Test MiFID II · Perfilado del inversor</div>'
-    '<hr class="app-rule">',
+    f"""
+    <div class="brand-bar">
+        <div class="brand-left">{_LOGO_SVG}</div>
+        <div class="brand-name">Invest<span class="ia">IA</span></div>
+    </div>
+    <div class="title-box">
+        <div class="app-title">Test MiFID II · Perfilado del inversor</div>
+    </div>
+    <hr class="app-rule">
+    """,
     unsafe_allow_html=True,
 )
 
