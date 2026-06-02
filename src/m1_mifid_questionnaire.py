@@ -43,6 +43,9 @@ __all__ = [
     "OPEN_QUESTIONS",
     "MiFIDResult",
     "score_mifid",
+    "ClosedScore",
+    "closed_score_normalized",
+    "floor_rule_active",
 ]
 
 # ===========================================================================
@@ -371,3 +374,91 @@ def score_mifid(
         pesos_horizonte=w,
         nlp_scores=tuple(round(float(x), 3) for x in nlp_scores),
     )
+
+
+# ===========================================================================
+# Puente cuestionario → prudencia asimétrica (modelo canónico del notebook M1)
+# ===========================================================================
+# El modelo canónico de M1 (``src.m1_remote_profiling.classify_profile``) fusiona
+# un score de cuestionario ``q_norm`` ∈ [-1,+1] con el sentimiento NLP por
+# *prudencia asimétrica* (el NLP solo puede BAJAR el perfil). El notebook usaba
+# un slider [0,100] como ``q_score``; aquí ese valor se deriva del cuestionario
+# MiFID completo (12 cerradas), reutilizando los pesos adaptativos por horizonte
+# de Plantilla C **excluyendo el bloque B5** (que entra después como el NLP).
+@dataclass(frozen=True)
+class ClosedScore:
+    """Score de los bloques cerrados (B1–B4), sin el bloque NLP B5.
+
+    Attributes
+    ----------
+    s1, s2, s3, s4
+        Scores normalizados [0,1] de cada bloque cerrado.
+    score01
+        Score agregado [0,1] con pesos adaptativos por horizonte
+        renormalizados a suma 1 (sin B5).
+    q_norm
+        ``score01`` remapeado a [-1,+1] = entrada ``q_score_normalized`` de
+        :func:`src.m1_remote_profiling.classify_profile`.
+    pesos_horizonte_cerrados
+        Los 4 pesos (w1..w4) renormalizados que producen ``score01``.
+    """
+
+    s1: float
+    s2: float
+    s3: float
+    s4: float
+    score01: float
+    q_norm: float
+    pesos_horizonte_cerrados: tuple[float, float, float, float]
+
+
+def _closed_points(closed: Mapping[str, int]) -> dict[str, int]:
+    missing = [k for k in CLOSED_KEYS if k not in closed]
+    if missing:
+        raise ValueError(f"Faltan respuestas cerradas: {missing}")
+    return {k: int(closed[k]) for k in CLOSED_KEYS}
+
+
+def closed_score_normalized(closed: Mapping[str, int]) -> ClosedScore:
+    """Score de las 12 cerradas → ``q_norm`` ∈ [-1,+1] para prudencia asimétrica.
+
+    Aplica los pesos adaptativos por horizonte (P8) de Plantilla C a B1–B4,
+    **excluyendo B5**, y renormaliza los cuatro pesos restantes a suma 1 para que
+    ``score01`` permanezca en [0,1]. Luego mapea a [-1,+1].
+    """
+    p = _closed_points(closed)
+
+    s1 = (p["p1"] + p["p2"] + p["p3"]) / MAX_BLOCK["B1"]
+    s2 = (p["p4"] + p["p5"] + p["p6"] + p["p7"]) / MAX_BLOCK["B2"]
+    s3 = (p["p8"] + p["p9"] + p["p10"] + p["p11"]) / MAX_BLOCK["B3"]
+    s4 = p["p12"] / MAX_BLOCK["B4"]
+
+    w = WEIGHTS_BY_HORIZON[p["p8"]]
+    w_closed = w[:4]
+    denom = sum(w_closed)  # = 1 - w5; siempre > 0
+    w_renorm = tuple(wi / denom for wi in w_closed)
+
+    score01 = w_renorm[0] * s1 + w_renorm[1] * s2 + w_renorm[2] * s3 + w_renorm[3] * s4
+    q_norm = score01 * 2.0 - 1.0
+
+    return ClosedScore(
+        s1=round(s1, 3),
+        s2=round(s2, 3),
+        s3=round(s3, 3),
+        s4=round(s4, 3),
+        score01=round(float(score01), 4),
+        q_norm=round(float(q_norm), 4),
+        pesos_horizonte_cerrados=tuple(round(x, 4) for x in w_renorm),  # type: ignore[arg-type]
+    )
+
+
+def floor_rule_active(closed: Mapping[str, int]) -> bool:
+    """Regla de suelo (salvaguarda normativa de capacidad económica).
+
+    Se activa si el impacto de perder el capital es grave/catastrófico
+    (``p5`` ≤ 1) o si las deudas superan el 50 % de los ingresos (``p6`` == 0).
+    Es independiente del apetito de riesgo y solo puede forzar el perfil a la
+    baja (Conservador), por lo que es compatible con la prudencia asimétrica.
+    """
+    p = _closed_points(closed)
+    return (p["p5"] <= 1) or (p["p6"] == 0)

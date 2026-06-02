@@ -52,6 +52,7 @@ __all__ = [
     "classify_profile",
     "RemoteProfiler",
     "ProfileResult",
+    "QuestionnaireProfileResult",
     "get_hf_token",
 ]
 
@@ -180,6 +181,41 @@ class ProfileResult:
     def as_dict(self) -> dict:
         """Vista en dict, conveniente para mostrar en la demo."""
         return self.__dict__.copy()
+
+
+@dataclass(frozen=True)
+class QuestionnaireProfileResult:
+    """Resultado del perfilado por **prudencia asimétrica** sobre el cuestionario
+    MiFID completo (12 cerradas + 3 abiertas).
+
+    Es la salida del modelo canónico de M1 aplicado a la ruta de la demo: el
+    cuestionario produce ``q_norm`` y un ``perfil_base``; el NLP (media del
+    sentimiento de las 3 respuestas abiertas) solo puede BAJAR el perfil vía
+    :func:`classify_profile`. La regla de suelo actúa como puerta previa.
+    """
+
+    perfil: str               # perfil final (capitalizado, p. ej. "Conservador")
+    sigma_max: float          # volatility cap del perfil final
+    perfil_base: str          # perfil derivado solo del cuestionario (cerradas)
+    perfil_final: str         # perfil tras la fusión NLP (minúsculas, interno)
+    floor_rule_activa: bool
+    q_norm: float
+    score_cerradas: float     # score [0,1] de las cerradas (sin B5)
+    sentiment_score: float    # media NLP [0,1] de las respuestas abiertas
+    confidence: str           # alta / media / baja
+    divergencia: float
+    escalones_bajados: int
+    flag_revisar: bool
+    s1: float
+    s2: float
+    s3: float
+    s4: float
+    nlp_scores: tuple[float, ...] = ()   # sentiment [0,1] por respuesta abierta
+
+    def as_dict(self) -> dict:
+        d = self.__dict__.copy()
+        d["nlp_scores"] = list(self.nlp_scores)
+        return d
 
 
 # ===========================================================================
@@ -363,3 +399,81 @@ class RemoteProfiler:
 
         nlp_scores = [self.nlp_proxy_score_es(t) for t in textos_abiertos]
         return score_mifid(closed, nlp_scores)
+
+    # --- Pipeline canónico: prudencia asimétrica sobre el cuestionario --------
+    def profile_investor_questionnaire(
+        self,
+        closed: "Mapping[str, int]",
+        textos_abiertos: "Sequence[str]",
+    ) -> "QuestionnaireProfileResult":
+        """Perfilado por **prudencia asimétrica** sobre el cuestionario completo.
+
+        Es el modelo canónico de M1 (el del notebook) aplicado a la demo:
+
+        1. ``q_norm`` se deriva de las 12 cerradas (Plantilla C sin B5,
+           renormalizado) → :func:`...closed_score_normalized`.
+        2. El sentimiento NLP es la media del ``sentiment_score`` ∈ [0,1]
+           (prob-weighted de FinBERT) de las respuestas abiertas NO vacías; la
+           confianza se deriva del ``top_prob`` medio. Si todas están vacías,
+           sentimiento neutral (0.5) y confianza baja.
+        3. La regla de suelo actúa como puerta previa: si está activa, el perfil
+           es Conservador con independencia del score.
+        4. En otro caso, :func:`classify_profile` aplica el descenso por
+           divergencia (el NLP solo puede BAJAR el perfil).
+
+        Returns
+        -------
+        QuestionnaireProfileResult
+        """
+        from src.m1_mifid_questionnaire import (
+            VOLATILITY_CAP as _VC,  # capitalizado: {"Conservador": 0.08, ...}
+        )
+        from src.m1_mifid_questionnaire import (
+            closed_score_normalized,
+            floor_rule_active,
+        )
+
+        cs = closed_score_normalized(closed)
+
+        # Sentimiento + confianza sobre respuestas NO vacías.
+        sents: list[float] = []
+        probs: list[float] = []
+        for t in textos_abiertos:
+            if (t or "").strip():
+                signed, prob = self.score_finbert(self.translate_es_to_en(t))
+                sents.append((signed + 1.0) / 2.0)
+                probs.append(prob)
+        if sents:
+            sentiment_score = sum(sents) / len(sents)
+            confidence = self._confidence_from_prob(sum(probs) / len(probs))
+        else:
+            sentiment_score, confidence = 0.5, "baja"
+
+        floor_active = floor_rule_active(closed)
+        decision = classify_profile(cs.q_norm, sentiment_score, confidence)
+
+        if floor_active:
+            perfil_final = "conservador"
+        else:
+            perfil_final = decision["perfil_final"]
+
+        perfil_cap = perfil_final.capitalize()
+        return QuestionnaireProfileResult(
+            perfil=perfil_cap,
+            sigma_max=_VC[perfil_cap],
+            perfil_base=decision["perfil_base"],
+            perfil_final=perfil_final,
+            floor_rule_activa=floor_active,
+            q_norm=cs.q_norm,
+            score_cerradas=cs.score01,
+            sentiment_score=round(float(sentiment_score), 4),
+            confidence=confidence,
+            divergencia=decision["divergencia"],
+            escalones_bajados=decision["escalones_bajados"],
+            flag_revisar=decision["flag_revisar"],
+            s1=cs.s1,
+            s2=cs.s2,
+            s3=cs.s3,
+            s4=cs.s4,
+            nlp_scores=tuple(round(x, 3) for x in sents),
+        )

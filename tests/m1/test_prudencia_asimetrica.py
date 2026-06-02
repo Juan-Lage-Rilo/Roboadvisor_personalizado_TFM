@@ -1,0 +1,148 @@
+"""Regresión del modelo canónico de M1 (prudencia asimétrica) sobre la ruta de
+la demo M5.
+
+Cubre tres capas:
+
+1. Los **20 casos sintéticos** HD/LD/LC/EC del notebook (§6.1) contra
+   ``classify_profile`` — la lógica de fusión portada verbatim.
+2. Los **helpers puros** del puente cuestionario→q_norm y la regla de suelo.
+3. Un caso **end-to-end** ("Sofía": cuestionario agresivo + texto conservador)
+   con un profiler simulado (sin red), que debe descender a Conservador.
+"""
+from __future__ import annotations
+
+import pytest
+
+from m1_mifid_questionnaire import (
+    CLOSED_KEYS,
+    closed_score_normalized,
+    floor_rule_active,
+)
+from m1_remote_profiling import RemoteProfiler, classify_profile
+
+# ---------------------------------------------------------------------------
+# 1. Los 20 casos canónicos (otros/notebooks_cells/06a_synthetic.py)
+# ---------------------------------------------------------------------------
+SYNTHETIC_CASES = [
+    ("HD1", +0.80, 0.05, "alta", "conservador"),
+    ("HD2", +0.70, 0.10, "alta", "conservador"),
+    ("HD3", +0.50, 0.55, "alta", "moderado"),
+    ("HD4", +0.70, 0.55, "media", "moderado"),
+    ("HD5", +0.50, 0.05, "alta", "conservador"),
+    ("LD1", -0.80, 0.15, "alta", "conservador"),
+    ("LD2", +0.00, 0.50, "alta", "moderado"),
+    ("LD3", +0.80, 0.85, "alta", "agresivo"),
+    ("LD4", -0.50, 0.30, "alta", "conservador"),
+    ("LD5", +0.20, 0.55, "alta", "moderado"),
+    ("LC1", +0.50, 0.35, "baja", "moderado"),
+    ("LC2", +0.45, 0.30, "baja", "moderado"),
+    ("LC3", +0.40, 0.40, "baja", "agresivo"),
+    ("LC4", -0.20, 0.50, "baja", "moderado"),
+    ("LC5", +0.40, 0.30, "baja", "moderado"),
+    ("EC1", +0.00, 0.50, "alta", "moderado"),
+    ("EC2", -0.99, 0.99, "baja", "conservador"),
+    ("EC3", +0.99, 0.85, "media", "agresivo"),
+    ("EC4", -0.40, 0.95, "alta", "conservador"),
+    ("EC5", +0.34, 0.65, "alta", "agresivo"),
+]
+
+
+@pytest.mark.parametrize("cid,q_norm,sentiment,conf,expected", SYNTHETIC_CASES)
+def test_classify_profile_synthetic(cid, q_norm, sentiment, conf, expected):
+    out = classify_profile(q_norm, sentiment, conf)
+    assert out["perfil_final"] == expected, f"{cid}: {out}"
+
+
+def test_prudencia_asimetrica_nunca_sube():
+    """Divergencia <= 0 (texto más agresivo que el test) nunca sube el perfil."""
+    for q_norm in (-0.99, -0.40, 0.0, 0.34):
+        out = classify_profile(q_norm, 0.99, "alta")
+        assert out["escalones_bajados"] == 0
+        assert out["perfil_final"] == out["perfil_base"]
+
+
+# ---------------------------------------------------------------------------
+# 2. Helpers puros: q_norm renormalizado y regla de suelo
+# ---------------------------------------------------------------------------
+def _closed(**overrides) -> dict[str, int]:
+    base = {k: 0 for k in CLOSED_KEYS}
+    base.update(overrides)
+    return base
+
+
+def test_q_norm_extremos():
+    todo_cero = _closed()
+    assert closed_score_normalized(todo_cero).q_norm == pytest.approx(-1.0)
+
+    todo_max = {"p1": 3, "p2": 4, "p3": 3, "p4": 3, "p5": 3, "p6": 3, "p7": 2,
+                "p8": 3, "p9": 3, "p10": 3, "p11": 3, "p12": 3}
+    assert closed_score_normalized(todo_max).q_norm == pytest.approx(+1.0)
+
+
+def test_q_norm_pesos_cerrados_suman_uno():
+    cs = closed_score_normalized(_closed(p8=2))
+    assert sum(cs.pesos_horizonte_cerrados) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_floor_rule():
+    assert floor_rule_active(_closed(p5=1, p6=3)) is True   # impacto grave
+    assert floor_rule_active(_closed(p5=0, p6=3)) is True   # catastrófico
+    assert floor_rule_active(_closed(p5=3, p6=0)) is True   # deudas > 50%
+    assert floor_rule_active(_closed(p5=2, p6=1)) is False  # ni una ni otra
+
+
+# ---------------------------------------------------------------------------
+# 3. End-to-end con profiler simulado (sin red)
+# ---------------------------------------------------------------------------
+class _FakeProfiler(RemoteProfiler):
+    """RemoteProfiler que no toca la red: el sentimiento se lee del propio texto.
+
+    Convención de los textos de test: si contienen 'CONS' → muy negativo
+    (conservador), 'AGR' → muy positivo, en otro caso neutral.
+    """
+
+    def __init__(self) -> None:  # noqa: D107 — salta la resolución de token HF
+        pass
+
+    def translate_es_to_en(self, text_es: str) -> str:  # noqa: D102
+        return text_es
+
+    def score_finbert(self, text_en: str) -> tuple[float, float]:  # noqa: D102
+        t = (text_en or "").upper()
+        if "CONS" in t:
+            return -0.9, 0.95
+        if "AGR" in t:
+            return +0.9, 0.95
+        return 0.0, 0.50
+
+
+# Cuestionario agresivo SIN floor rule (p5=3, p6=3) — perfil AG01.
+_AGRESIVO = {"p1": 3, "p2": 3, "p3": 3, "p4": 3, "p5": 3, "p6": 3, "p7": 2,
+             "p8": 3, "p9": 3, "p10": 3, "p11": 3, "p12": 2}
+
+
+def test_sofia_agresivo_mas_texto_conservador_baja_a_conservador():
+    """El bug original: test agresivo + texto conservador → Conservador."""
+    res = _FakeProfiler().profile_investor_questionnaire(
+        _AGRESIVO, ["CONS", "CONS", "CONS"]
+    )
+    assert res.perfil_base == "agresivo"
+    assert res.perfil == "Conservador"
+    assert res.escalones_bajados == 2
+    assert res.floor_rule_activa is False
+
+
+def test_agresivo_alineado_se_mantiene():
+    res = _FakeProfiler().profile_investor_questionnaire(
+        _AGRESIVO, ["AGR", "AGR", "AGR"]
+    )
+    assert res.perfil == "Agresivo"
+    assert res.escalones_bajados == 0
+
+
+def test_floor_rule_domina_pese_a_texto_agresivo():
+    """Capacidad económica grave (p5=1) → Conservador aunque el texto sea eufórico."""
+    closed = dict(_AGRESIVO, p5=1)
+    res = _FakeProfiler().profile_investor_questionnaire(closed, ["AGR", "AGR", "AGR"])
+    assert res.floor_rule_activa is True
+    assert res.perfil == "Conservador"
