@@ -14,11 +14,14 @@ Diferencias frente al pipeline completo del notebook ``m1_nlp_profiling.ipynb``
 - **Solo se usa la Rama A** del NLP dual: Opus-MT (ES→EN) → FinBERT, ambos vía
   API remota. La Rama B (RoBERTuito / pysentimiento) NO está soportada por el
   provider ``hf-inference``, por lo que se omite en la demo.
-- Como sin Rama B no existe *agreement* inter-pipeline, la ``confidence`` que
-  consume :func:`classify_profile` se deriva aquí de la probabilidad del
-  top-label de FinBERT, usando los MISMOS umbrales (0.80 / 0.60) que el
-  notebook aplicaba sobre el agreement. Es una adaptación documentada de la
-  demo; la lógica de fusión en sí (``classify_profile``) se porta *verbatim*.
+- Como sin Rama B no existe *agreement* inter-pipeline, la ``confidence`` no es
+  calculable. La ruta canónica de la demo
+  (:meth:`RemoteProfiler.profile_investor_questionnaire`) la **fija a "media"**
+  (``CONFIDENCE_CLOUD_FIXED``), la banda intermedia honesta: ALTA/BAJA exigirían
+  el agreement de la segunda red. La lógica de fusión en sí (``classify_profile``)
+  se porta *verbatim*. (La ruta legacy de un solo texto,
+  :meth:`profile_investor`, conserva la heurística ``_confidence_from_prob`` por
+  compatibilidad, pero la app no la usa.)
 
 Seguridad
 ---------
@@ -52,6 +55,7 @@ __all__ = [
     "classify_profile",
     "RemoteProfiler",
     "ProfileResult",
+    "QuestionnaireProfileResult",
     "get_hf_token",
 ]
 
@@ -77,6 +81,13 @@ DIVERGENCE_THRESHOLDS: dict[str, dict[str, float]] = {
 }
 PROFILE_ORDER = ("agresivo", "moderado", "conservador")
 VOLATILITY_CAP = {"conservador": 0.08, "moderado": 0.15, "agresivo": 0.25}
+
+# Confianza FIJA de la variante cloud (ver docstring del módulo). En Fase 0 la
+# confianza sale del *agreement* inter-pipeline (FinBERT vs RoBERTuito); sin la
+# Rama B, ALTA/BAJA no son alcanzables, así que se fija a la banda intermedia
+# honesta "media". NO es un valor calculado: es una decisión documentada de la
+# demo reducida.
+CONFIDENCE_CLOUD_FIXED = "media"
 
 
 def _base_profile(q_norm: float) -> str:
@@ -180,6 +191,41 @@ class ProfileResult:
     def as_dict(self) -> dict:
         """Vista en dict, conveniente para mostrar en la demo."""
         return self.__dict__.copy()
+
+
+@dataclass(frozen=True)
+class QuestionnaireProfileResult:
+    """Resultado del perfilado por **prudencia asimétrica** sobre el cuestionario
+    MiFID completo (12 cerradas + 3 abiertas).
+
+    Es la salida del modelo canónico de M1 aplicado a la ruta de la demo: el
+    cuestionario produce ``q_norm`` y un ``perfil_base``; el NLP (media del
+    sentimiento de las 3 respuestas abiertas) solo puede BAJAR el perfil vía
+    :func:`classify_profile`. La regla de suelo actúa como puerta previa.
+    """
+
+    perfil: str               # perfil final (capitalizado, p. ej. "Conservador")
+    sigma_max: float          # volatility cap del perfil final
+    perfil_base: str          # perfil derivado solo del cuestionario (cerradas)
+    perfil_final: str         # perfil tras la fusión NLP (minúsculas, interno)
+    floor_rule_activa: bool
+    q_norm: float
+    score_cerradas: float     # score [0,1] de las cerradas (sin B5)
+    sentiment_score: float    # media NLP [0,1] de las respuestas abiertas
+    confidence: str           # alta / media / baja
+    divergencia: float
+    escalones_bajados: int
+    flag_revisar: bool
+    s1: float
+    s2: float
+    s3: float
+    s4: float
+    nlp_scores: tuple[float, ...] = ()   # sentiment [0,1] por respuesta abierta
+
+    def as_dict(self) -> dict:
+        d = self.__dict__.copy()
+        d["nlp_scores"] = list(self.nlp_scores)
+        return d
 
 
 # ===========================================================================
@@ -363,3 +409,80 @@ class RemoteProfiler:
 
         nlp_scores = [self.nlp_proxy_score_es(t) for t in textos_abiertos]
         return score_mifid(closed, nlp_scores)
+
+    # --- Pipeline canónico: prudencia asimétrica sobre el cuestionario --------
+    def profile_investor_questionnaire(
+        self,
+        closed: "Mapping[str, int]",
+        textos_abiertos: "Sequence[str]",
+    ) -> "QuestionnaireProfileResult":
+        """Perfilado por **prudencia asimétrica** sobre el cuestionario completo.
+
+        Es el modelo canónico de M1 (el del notebook) aplicado a la demo:
+
+        1. ``q_norm`` se deriva de las 12 cerradas (Plantilla C sin B5,
+           renormalizado) → :func:`...closed_score_normalized`.
+        2. El sentimiento NLP es la media de ``signo(top)·prob`` de FinBERT
+           (mapeado a [0,1], fiel al notebook) sobre las respuestas abiertas NO
+           vacías. Si todas están vacías, sentimiento neutral (0.5). La
+           ``confidence`` se FIJA a ``"media"`` (``CONFIDENCE_CLOUD_FIXED``): sin
+           Rama B no hay *agreement*, por lo que ALTA/BAJA no son alcanzables.
+        3. La regla de suelo actúa como puerta previa: si está activa, el perfil
+           es Conservador con independencia del score.
+        4. En otro caso, :func:`classify_profile` aplica el descenso por
+           divergencia (el NLP solo puede BAJAR el perfil).
+
+        Returns
+        -------
+        QuestionnaireProfileResult
+        """
+        from src.m1_mifid_questionnaire import (
+            VOLATILITY_CAP as _VC,  # capitalizado: {"Conservador": 0.08, ...}
+        )
+        from src.m1_mifid_questionnaire import (
+            closed_score_normalized,
+            floor_rule_active,
+        )
+
+        cs = closed_score_normalized(closed)
+
+        # Sentimiento sobre respuestas NO vacías: media de signo(top)·prob de
+        # FinBERT, mapeado a [0,1]. Es la fórmula del notebook (03_inference.py),
+        # no la discretización 1.0/0.5/0.0 del proxy de Plantilla C.
+        sents: list[float] = []
+        for t in textos_abiertos:
+            if (t or "").strip():
+                signed, _prob = self.score_finbert(self.translate_es_to_en(t))
+                sents.append((signed + 1.0) / 2.0)
+        sentiment_score = (sum(sents) / len(sents)) if sents else 0.5
+        # Confianza FIJADA: sin Rama B (RoBERTuito) no hay agreement → "media".
+        confidence = CONFIDENCE_CLOUD_FIXED
+
+        floor_active = floor_rule_active(closed)
+        decision = classify_profile(cs.q_norm, sentiment_score, confidence)
+
+        if floor_active:
+            perfil_final = "conservador"
+        else:
+            perfil_final = decision["perfil_final"]
+
+        perfil_cap = perfil_final.capitalize()
+        return QuestionnaireProfileResult(
+            perfil=perfil_cap,
+            sigma_max=_VC[perfil_cap],
+            perfil_base=decision["perfil_base"],
+            perfil_final=perfil_final,
+            floor_rule_activa=floor_active,
+            q_norm=cs.q_norm,
+            score_cerradas=cs.score01,
+            sentiment_score=round(float(sentiment_score), 4),
+            confidence=confidence,
+            divergencia=decision["divergencia"],
+            escalones_bajados=decision["escalones_bajados"],
+            flag_revisar=decision["flag_revisar"],
+            s1=cs.s1,
+            s2=cs.s2,
+            s3=cs.s3,
+            s4=cs.s4,
+            nlp_scores=tuple(round(x, 3) for x in sents),
+        )

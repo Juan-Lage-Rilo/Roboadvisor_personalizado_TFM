@@ -1,10 +1,15 @@
 """
 Demo M5 — Roboadvisor TFM (Streamlit Cloud)
 ===========================================
-Interfaz del módulo M1 (perfilado del inversor) mediante el **cuestionario
-MiFID II Plantilla C** documentado en ``docs/mifid/``: 12 preguntas cerradas
-(bloques B1–B4) + 3 abiertas (B5, análisis de sentimiento NLP), con pesos
-adaptativos por horizonte y regla de suelo.
+Interfaz del módulo M1 (perfilado del inversor). El cuestionario MiFID II
+documentado en ``docs/mifid/`` (12 preguntas cerradas B1–B4 + 3 abiertas)
+alimenta el **modelo canónico de prudencia asimétrica** del notebook M1:
+
+- las 12 cerradas producen un ``q_norm`` (Plantilla C sin B5, renormalizado)
+  que fija el **perfil base**;
+- el análisis de sentimiento NLP de las 3 abiertas **solo puede bajar** el
+  perfil (nunca subirlo) vía ``classify_profile``;
+- la **regla de suelo** (capacidad económica, P5/P6) actúa como puerta previa.
 
 Todas las preguntas (cerradas y abiertas) son **obligatorias**: el formulario
 no se procesa hasta que están completas. Los radios no llevan opción
@@ -41,7 +46,6 @@ import streamlit as st
 from src.m1_mifid_questionnaire import (
     OPEN_QUESTIONS,
     QUESTIONNAIRE,
-    score_mifid,
 )
 from src.m1_remote_profiling import RemoteProfiler, get_hf_token
 
@@ -338,13 +342,12 @@ if enviado:
     }
 
     # =======================================================================
-    # Inferencia
+    # Inferencia — modelo canónico de prudencia asimétrica
     # =======================================================================
     with st.spinner("Analizando respuestas abiertas con la HuggingFace Inference API…"):
         try:
             profiler = _get_profiler()
-            nlp_scores = [profiler.nlp_proxy_score_es(t) for t in textos]
-            result = score_mifid(closed, nlp_scores)
+            result = profiler.profile_investor_questionnaire(closed, textos)
         except Exception as exc:  # noqa: BLE001
             st.error(f"Error en el perfilado: {exc}")
             st.stop()
@@ -374,17 +377,25 @@ if enviado:
     )
 
     # =======================================================================
-    # Nota para el asesor  (cambio 4: justificación + score, apartado aparte)
+    # Nota para el asesor  (justificación + trazabilidad, apartado aparte)
     # =======================================================================
     st.subheader("Nota para el asesor")
     st.caption(
-        "Justificación del perfil asignado y puntuación de soporte. Información "
+        "Justificación del perfil asignado y métricas de soporte. Información "
         "interna de trazabilidad, no destinada al cliente final."
     )
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Score final", f"{result.score_final:.3f}", help="Rango [0, 1].")
-    c2.metric("Bloque NLP", f"{result.s5:.2f}")
+    c1.metric(
+        "Perfil base (cuestionario)",
+        result.perfil_base.capitalize(),
+        help="Derivado solo de las 12 preguntas cerradas (q_norm).",
+    )
+    c2.metric(
+        "Escalones bajados por NLP",
+        result.escalones_bajados,
+        help="La prudencia asimétrica solo permite bajar, nunca subir.",
+    )
     c3.metric(
         "Regla de suelo",
         "Activa" if result.floor_rule_activa else "No activa",
@@ -394,37 +405,54 @@ if enviado:
         st.warning(
             "**Regla de suelo activada**: la capacidad económica declarada "
             "(impacto grave de una pérdida o endeudamiento alto) fija el perfil "
-            "en **Conservador** con independencia del score numérico. Es una "
-            "salvaguarda regulatoria (Directrices ESMA)."
+            "en **Conservador** con independencia del resto. Es una salvaguarda "
+            "regulatoria (Directrices ESMA)."
+        )
+    elif result.escalones_bajados > 0:
+        st.info(
+            f"El análisis de sentimiento ha **bajado** el perfil de "
+            f"*{result.perfil_base}* a *{result.perfil_final}* "
+            f"({result.escalones_bajados} escalón/es): el texto libre es más "
+            f"prudente que las respuestas cerradas (divergencia "
+            f"{result.divergencia:+.2f})."
+        )
+    elif result.flag_revisar:
+        st.info(
+            "Divergencia leve entre cuestionario y texto libre: se mantiene el "
+            "perfil base, pero queda marcado para **revisión del texto**."
         )
 
-    # --- Desglose por bloques ----------------------------------------------
-    with st.expander("¿Por qué este perfil? — desglose por bloques", expanded=True):
-        pesos = result.pesos_horizonte
-        st.markdown("**Score = Σ pesoᵢ(horizonte) · Sᵢ**")
+    # --- Desglose: fusión por prudencia asimétrica -------------------------
+    with st.expander("¿Por qué este perfil? — fusión por prudencia asimétrica", expanded=True):
+        st.markdown(
+            "El cuestionario fija el **perfil base**; el NLP solo puede **bajarlo** "
+            "según la *divergencia* = `q_norm − sentiment_norm`."
+        )
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("q_norm (cuestionario)", f"{result.q_norm:+.2f}", help="Rango [-1, +1].")
+        m2.metric("Sentimiento NLP", f"{result.sentiment_score:.2f}", help="Rango [0, 1].")
+        m3.metric("Divergencia", f"{result.divergencia:+.2f}")
+        m4.metric(
+            "Confianza NLP",
+            result.confidence.capitalize(),
+            help="Fijada a 'media': la variante cloud no calcula el agreement "
+            "inter-pipeline (requeriría RoBERTuito, no servido por hf-inference).",
+        )
         st.table(
             {
-                "Bloque": [
+                "Bloque cerrado": [
                     "Conocimientos",
                     "Situación financiera",
                     "Objetivos",
                     "ESG",
-                    "NLP (sentimiento)",
                 ],
-                "Score (Sᵢ)": [result.s1, result.s2, result.s3, result.s4, result.s5],
-                "Peso": [f"{w:.0%}" for w in pesos],
-                "Aportación": [
-                    round(pesos[i] * s, 3)
-                    for i, s in enumerate(
-                        [result.s1, result.s2, result.s3, result.s4, result.s5]
-                    )
-                ],
+                "Score (Sᵢ)": [result.s1, result.s2, result.s3, result.s4],
             }
         )
         st.caption(
-            "Los pesos cambian según el horizonte temporal (P8). El NLP es la "
-            "media de las 3 respuestas abiertas (positivo=1.0 · neutral=0.5 · "
-            "negativo=0.0)."
+            f"Perfil base **{result.perfil_base}** → final **{result.perfil_final}** "
+            f"({result.escalones_bajados} escalón/es). El sentimiento es la media "
+            "del análisis FinBERT de las respuestas abiertas (prob-weighted)."
         )
 
     with st.expander("Detalle / trazabilidad (JSON)"):
