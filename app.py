@@ -432,7 +432,12 @@ if enviado:
         m1.metric("q_norm (cuestionario)", f"{result.q_norm:+.2f}", help="Rango [-1, +1].")
         m2.metric("Sentimiento NLP", f"{result.sentiment_score:.2f}", help="Rango [0, 1].")
         m3.metric("Divergencia", f"{result.divergencia:+.2f}")
-        m4.metric("Confianza NLP", result.confidence.capitalize())
+        m4.metric(
+            "Confianza NLP",
+            result.confidence.capitalize(),
+            help="Fijada a 'media': la variante cloud no calcula el agreement "
+            "inter-pipeline (requeriría RoBERTuito, no servido por hf-inference).",
+        )
         st.table(
             {
                 "Bloque cerrado": [

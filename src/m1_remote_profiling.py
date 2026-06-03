@@ -14,11 +14,14 @@ Diferencias frente al pipeline completo del notebook ``m1_nlp_profiling.ipynb``
 - **Solo se usa la Rama A** del NLP dual: Opus-MT (ES→EN) → FinBERT, ambos vía
   API remota. La Rama B (RoBERTuito / pysentimiento) NO está soportada por el
   provider ``hf-inference``, por lo que se omite en la demo.
-- Como sin Rama B no existe *agreement* inter-pipeline, la ``confidence`` que
-  consume :func:`classify_profile` se deriva aquí de la probabilidad del
-  top-label de FinBERT, usando los MISMOS umbrales (0.80 / 0.60) que el
-  notebook aplicaba sobre el agreement. Es una adaptación documentada de la
-  demo; la lógica de fusión en sí (``classify_profile``) se porta *verbatim*.
+- Como sin Rama B no existe *agreement* inter-pipeline, la ``confidence`` no es
+  calculable. La ruta canónica de la demo
+  (:meth:`RemoteProfiler.profile_investor_questionnaire`) la **fija a "media"**
+  (``CONFIDENCE_CLOUD_FIXED``), la banda intermedia honesta: ALTA/BAJA exigirían
+  el agreement de la segunda red. La lógica de fusión en sí (``classify_profile``)
+  se porta *verbatim*. (La ruta legacy de un solo texto,
+  :meth:`profile_investor`, conserva la heurística ``_confidence_from_prob`` por
+  compatibilidad, pero la app no la usa.)
 
 Seguridad
 ---------
@@ -78,6 +81,13 @@ DIVERGENCE_THRESHOLDS: dict[str, dict[str, float]] = {
 }
 PROFILE_ORDER = ("agresivo", "moderado", "conservador")
 VOLATILITY_CAP = {"conservador": 0.08, "moderado": 0.15, "agresivo": 0.25}
+
+# Confianza FIJA de la variante cloud (ver docstring del módulo). En Fase 0 la
+# confianza sale del *agreement* inter-pipeline (FinBERT vs RoBERTuito); sin la
+# Rama B, ALTA/BAJA no son alcanzables, así que se fija a la banda intermedia
+# honesta "media". NO es un valor calculado: es una decisión documentada de la
+# demo reducida.
+CONFIDENCE_CLOUD_FIXED = "media"
 
 
 def _base_profile(q_norm: float) -> str:
@@ -412,10 +422,11 @@ class RemoteProfiler:
 
         1. ``q_norm`` se deriva de las 12 cerradas (Plantilla C sin B5,
            renormalizado) → :func:`...closed_score_normalized`.
-        2. El sentimiento NLP es la media del ``sentiment_score`` ∈ [0,1]
-           (prob-weighted de FinBERT) de las respuestas abiertas NO vacías; la
-           confianza se deriva del ``top_prob`` medio. Si todas están vacías,
-           sentimiento neutral (0.5) y confianza baja.
+        2. El sentimiento NLP es la media de ``signo(top)·prob`` de FinBERT
+           (mapeado a [0,1], fiel al notebook) sobre las respuestas abiertas NO
+           vacías. Si todas están vacías, sentimiento neutral (0.5). La
+           ``confidence`` se FIJA a ``"media"`` (``CONFIDENCE_CLOUD_FIXED``): sin
+           Rama B no hay *agreement*, por lo que ALTA/BAJA no son alcanzables.
         3. La regla de suelo actúa como puerta previa: si está activa, el perfil
            es Conservador con independencia del score.
         4. En otro caso, :func:`classify_profile` aplica el descenso por
@@ -435,19 +446,17 @@ class RemoteProfiler:
 
         cs = closed_score_normalized(closed)
 
-        # Sentimiento + confianza sobre respuestas NO vacías.
+        # Sentimiento sobre respuestas NO vacías: media de signo(top)·prob de
+        # FinBERT, mapeado a [0,1]. Es la fórmula del notebook (03_inference.py),
+        # no la discretización 1.0/0.5/0.0 del proxy de Plantilla C.
         sents: list[float] = []
-        probs: list[float] = []
         for t in textos_abiertos:
             if (t or "").strip():
-                signed, prob = self.score_finbert(self.translate_es_to_en(t))
+                signed, _prob = self.score_finbert(self.translate_es_to_en(t))
                 sents.append((signed + 1.0) / 2.0)
-                probs.append(prob)
-        if sents:
-            sentiment_score = sum(sents) / len(sents)
-            confidence = self._confidence_from_prob(sum(probs) / len(probs))
-        else:
-            sentiment_score, confidence = 0.5, "baja"
+        sentiment_score = (sum(sents) / len(sents)) if sents else 0.5
+        # Confianza FIJADA: sin Rama B (RoBERTuito) no hay agreement → "media".
+        confidence = CONFIDENCE_CLOUD_FIXED
 
         floor_active = floor_rule_active(closed)
         decision = classify_profile(cs.q_norm, sentiment_score, confidence)

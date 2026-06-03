@@ -146,3 +146,10 @@ def test_floor_rule_domina_pese_a_texto_agresivo():
     res = _FakeProfiler().profile_investor_questionnaire(closed, ["AGR", "AGR", "AGR"])
     assert res.floor_rule_activa is True
     assert res.perfil == "Conservador"
+
+
+def test_confianza_siempre_media_en_cloud():
+    """La variante cloud fija confidence="media" (sin agreement inter-pipeline)."""
+    for textos in (["CONS", "CONS", "CONS"], ["AGR", "AGR", "AGR"], ["x", "y", "z"]):
+        res = _FakeProfiler().profile_investor_questionnaire(_AGRESIVO, textos)
+        assert res.confidence == "media"
