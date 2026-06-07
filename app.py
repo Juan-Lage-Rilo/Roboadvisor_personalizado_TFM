@@ -418,15 +418,18 @@ if enviado:
         )
     elif result.flag_revisar:
         st.info(
-            "Divergencia leve entre cuestionario y texto libre: se mantiene el "
-            "perfil base, pero queda marcado para **revisión del texto**."
+            "El texto libre **diverge** del cuestionario, pero no aporta "
+            "evidencia de prudencia suficiente para bajar el perfil (texto "
+            "neutral o positivo). Se mantiene el perfil base y se **marca para "
+            "revisión** humana."
         )
 
     # --- Desglose: fusión por prudencia asimétrica -------------------------
     with st.expander("¿Por qué este perfil? — fusión por prudencia asimétrica", expanded=True):
         st.markdown(
             "El cuestionario fija el **perfil base**; el NLP solo puede **bajarlo** "
-            "según la *divergencia* = `q_norm − sentiment_norm`."
+            "y **solo si el texto es genuinamente prudente** (no basta con que sea "
+            "neutral). Divergencia = `q_norm − sentiment_norm`."
         )
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("q_norm (cuestionario)", f"{result.q_norm:+.2f}", help="Rango [-1, +1].")
