@@ -1,13 +1,18 @@
 """Regresión del modelo canónico de M1 (prudencia asimétrica) sobre la ruta de
 la demo M5.
 
-Cubre tres capas:
+Cubre cinco capas:
 
 1. Los **20 casos sintéticos** HD/LD/LC/EC del notebook (§6.1) contra
-   ``classify_profile`` — la lógica de fusión portada verbatim.
+   ``classify_profile`` — la lógica de fusión portada verbatim (baseline).
 2. Los **helpers puros** del puente cuestionario→q_norm y la regla de suelo.
-3. Un caso **end-to-end** ("Sofía": cuestionario agresivo + texto conservador)
-   con un profiler simulado (sin red), que debe descender a Conservador.
+3. Casos **end-to-end** (profiler simulado sin red): Sofía (texto conservador →
+   Conservador), floor rule, confianza fija "media".
+4. La **fusión mejorada** ``classify_profile_prudence`` (guarda de neutralidad):
+   el NLP solo baja con evidencia de prudencia real; 2 escalones solo con señal
+   negativa fuerte.
+5. El **caso real del PDF** (``caso_erroneo``): agresivo coherente + texto que
+   FinBERT lee neutral → ya NO baja a Conservador (regresión del falso descenso).
 """
 from __future__ import annotations
 
@@ -18,7 +23,11 @@ from m1_mifid_questionnaire import (
     closed_score_normalized,
     floor_rule_active,
 )
-from m1_remote_profiling import RemoteProfiler, classify_profile
+from m1_remote_profiling import (
+    RemoteProfiler,
+    classify_profile,
+    classify_profile_prudence,
+)
 
 # ---------------------------------------------------------------------------
 # 1. Los 20 casos canónicos (otros/notebooks_cells/06a_synthetic.py)
@@ -97,8 +106,11 @@ def test_floor_rule():
 class _FakeProfiler(RemoteProfiler):
     """RemoteProfiler que no toca la red: el sentimiento se lee del propio texto.
 
-    Convención de los textos de test: si contienen 'CONS' → muy negativo
-    (conservador), 'AGR' → muy positivo, en otro caso neutral.
+    Convención de los textos de test:
+      'CONS' → muy negativo (prudencia fuerte, norm −0.9)
+      'MILD' → algo negativo (prudencia leve,   norm −0.4)
+      'AGR'  → muy positivo (norm +0.9)
+      otro   → neutral (norm 0.0)
     """
 
     def __init__(self) -> None:  # noqa: D107 — salta la resolución de token HF
@@ -111,6 +123,8 @@ class _FakeProfiler(RemoteProfiler):
         t = (text_en or "").upper()
         if "CONS" in t:
             return -0.9, 0.95
+        if "MILD" in t:
+            return -0.4, 0.60
         if "AGR" in t:
             return +0.9, 0.95
         return 0.0, 0.50
@@ -153,3 +167,65 @@ def test_confianza_siempre_media_en_cloud():
     for textos in (["CONS", "CONS", "CONS"], ["AGR", "AGR", "AGR"], ["x", "y", "z"]):
         res = _FakeProfiler().profile_investor_questionnaire(_AGRESIVO, textos)
         assert res.confidence == "media"
+
+
+# ---------------------------------------------------------------------------
+# 4. Fusión mejorada: classify_profile_prudence (guarda de neutralidad)
+# ---------------------------------------------------------------------------
+def test_prudence_texto_neutral_no_baja_pero_flag():
+    """q agresivo + sentimiento NEUTRAL (0.5) → NO baja; marca flag_revisar."""
+    out = classify_profile_prudence(0.93, 0.50, "media")
+    assert out["escalones_bajados"] == 0
+    assert out["perfil_final"] == "agresivo"
+    assert out["flag_revisar"] is True
+
+
+def test_prudence_texto_positivo_no_baja_ni_flag():
+    """q agresivo + sentimiento POSITIVO alineado → se mantiene, sin flag."""
+    out = classify_profile_prudence(0.80, 0.85, "media")
+    assert out["escalones_bajados"] == 0
+    assert out["perfil_final"] == "agresivo"
+    assert out["flag_revisar"] is False
+
+
+def test_prudence_prudente_leve_baja_un_escalon():
+    """q agresivo + prudencia LEVE (norm −0.4) → 1 escalón (no 2)."""
+    out = classify_profile_prudence(0.92, 0.30, "media")  # sentiment_norm = -0.40
+    assert out["escalones_bajados"] == 1
+    assert out["perfil_final"] == "moderado"
+
+
+def test_prudence_prudente_fuerte_baja_dos_escalones():
+    """q agresivo + prudencia FUERTE (norm ≤ −0.6) → 2 escalones."""
+    out = classify_profile_prudence(0.92, 0.05, "media")  # sentiment_norm = -0.90
+    assert out["escalones_bajados"] == 2
+    assert out["perfil_final"] == "conservador"
+
+
+def test_prudence_nunca_sube():
+    """Divergencia negativa (texto más agresivo que el test) nunca sube."""
+    for q in (-0.99, -0.40, 0.0, 0.34):
+        out = classify_profile_prudence(q, 0.99, "alta")
+        assert out["escalones_bajados"] == 0
+        assert out["perfil_final"] == out["perfil_base"]
+
+
+# ---------------------------------------------------------------------------
+# 5. Caso REAL del PDF (caso_erroneo): inversor CFA agresivo y coherente,
+#    textos agresivos que FinBERT lee como NEUTRAL (sentiment 0.50).
+#    Antes bajaba 2 escalones a Conservador (falso descenso); ahora se mantiene.
+# ---------------------------------------------------------------------------
+_CFA_AGRESIVO = {"p1": 3, "p2": 2, "p3": 3, "p4": 3, "p5": 3, "p6": 3, "p7": 2,
+                 "p8": 3, "p9": 3, "p10": 3, "p11": 3, "p12": 3}
+
+
+def test_caso_pdf_cfa_agresivo_texto_neutral_no_baja():
+    """Regresión del caso_erroneo.pdf: agresivo coherente + texto neutral FinBERT."""
+    res = _FakeProfiler().profile_investor_questionnaire(
+        _CFA_AGRESIVO, ["x", "y", "z"]  # neutral en el FakeProfiler
+    )
+    assert res.perfil_base == "agresivo"
+    assert res.sentiment_score == 0.5
+    assert res.escalones_bajados == 0
+    assert res.perfil == "Agresivo"
+    assert res.flag_revisar is True  # divergencia notable, marcada para revisión

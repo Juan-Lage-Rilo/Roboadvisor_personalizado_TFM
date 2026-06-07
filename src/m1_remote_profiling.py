@@ -53,6 +53,9 @@ __all__ = [
     "PROFILE_ORDER",
     "VOLATILITY_CAP",
     "classify_profile",
+    "classify_profile_prudence",
+    "NEUTRAL_BAND",
+    "STRONG_NEGATIVE",
     "RemoteProfiler",
     "ProfileResult",
     "QuestionnaireProfileResult",
@@ -139,6 +142,87 @@ def classify_profile(
         }
     except Exception as exc:
         logger.error("classify_profile error: %s", exc)
+        raise
+
+
+# ===========================================================================
+# Fusión mejorada — descenso solo con EVIDENCIA DE PRUDENCIA real.
+# ===========================================================================
+# Problema de :func:`classify_profile` (notebook verbatim): baja el perfil por la
+# magnitud de la divergencia, tratando un texto NEUTRAL como si fuera prudente.
+# Un cuestionario muy agresivo (q_norm≈+0.93) + texto neutral (FinBERT≈0.5,
+# sentiment_norm≈0) genera divergencia≈0.93 y baja DOS escalones hasta
+# Conservador. Pero neutral = "sin señal", no "prudente": FinBERT es un
+# clasificador de polaridad de NOTICIAS financieras, no de apetito de riesgo, y
+# devuelve neutral para la mayoría de textos de tolerancia ("soporto la
+# volatilidad", "no me preocupa"). Resultado: falsos descensos en inversores
+# agresivos coherentes (el error de idoneidad más grave: mis-selling a la baja).
+#
+# Esta variante exige EVIDENCIA DE PRUDENCIA real (sentimiento por debajo de la
+# banda neutral) para bajar, y limita el descenso a 1 escalón salvo señal
+# negativa FUERTE. Es la regla que usa la demo (profile_investor_questionnaire).
+NEUTRAL_BAND = 0.20       # |sentiment_norm| <= 0.20  -> texto neutral (sin señal)
+STRONG_NEGATIVE = -0.60   # sentiment_norm <= -0.60   -> prudencia fuerte (2 escalones)
+
+
+def classify_profile_prudence(
+    q_score_normalized: float,
+    sentiment_score: float,
+    confidence: str,
+) -> dict:
+    """Prudencia asimétrica con **guarda de neutralidad**.
+
+    Diferencias frente a :func:`classify_profile` (la versión del notebook):
+
+    - El NLP solo baja si el texto es **genuinamente prudente**:
+      ``sentiment_norm <= -NEUTRAL_BAND``. Un texto neutral o positivo NO baja
+      el perfil; si además diverge mucho del cuestionario, marca
+      ``flag_revisar`` (discrepancia para revisión humana, no descenso).
+    - Descenso de **2 escalones solo con señal negativa FUERTE**
+      (``sentiment_norm <= STRONG_NEGATIVE`` y base agresivo); en el resto, como
+      mucho 1 escalón.
+
+    Misma firma y forma de salida que :func:`classify_profile` (drop-in).
+    """
+    try:
+        sentiment_norm = sentiment_score * 2.0 - 1.0  # [0,1] -> [-1,+1]
+        divergence = q_score_normalized - sentiment_norm
+        base = _base_profile(q_score_normalized)
+        thr = DIVERGENCE_THRESHOLDS[confidence]
+
+        steps = 0
+        flag_revisar = False
+        text_is_prudent = sentiment_norm <= -NEUTRAL_BAND
+
+        if not text_is_prudent:
+            # Neutral o positivo: sin evidencia de prudencia -> no baja.
+            # Si la divergencia es notable, se marca para revisión humana.
+            if divergence > thr["moderado"]:
+                flag_revisar = True
+        elif divergence <= 0:
+            steps = 0
+        elif (
+            divergence > thr["grave"]
+            and base == "agresivo"
+            and sentiment_norm <= STRONG_NEGATIVE
+        ):
+            steps = 2
+        elif divergence > thr["moderado"]:
+            steps = 1
+        elif divergence > thr["leve"]:
+            flag_revisar = True
+
+        final = _downgrade(base, steps)
+        return {
+            "perfil_base": base,
+            "perfil_final": final,
+            "divergencia": round(float(divergence), 4),
+            "flag_revisar": flag_revisar,
+            "escalones_bajados": steps,
+            "volatility_cap": VOLATILITY_CAP[final],
+        }
+    except Exception as exc:
+        logger.error("classify_profile_prudence error: %s", exc)
         raise
 
 
@@ -429,8 +513,10 @@ class RemoteProfiler:
            Rama B no hay *agreement*, por lo que ALTA/BAJA no son alcanzables.
         3. La regla de suelo actúa como puerta previa: si está activa, el perfil
            es Conservador con independencia del score.
-        4. En otro caso, :func:`classify_profile` aplica el descenso por
-           divergencia (el NLP solo puede BAJAR el perfil).
+        4. En otro caso, :func:`classify_profile_prudence` aplica el descenso:
+           el NLP solo BAJA el perfil si el texto es **genuinamente prudente**
+           (no basta con que sea neutral), y 2 escalones solo con señal negativa
+           fuerte.
 
         Returns
         -------
@@ -459,7 +545,9 @@ class RemoteProfiler:
         confidence = CONFIDENCE_CLOUD_FIXED
 
         floor_active = floor_rule_active(closed)
-        decision = classify_profile(cs.q_norm, sentiment_score, confidence)
+        # Fusión con guarda de neutralidad: el NLP solo baja con evidencia de
+        # prudencia real (ver classify_profile_prudence).
+        decision = classify_profile_prudence(cs.q_norm, sentiment_score, confidence)
 
         if floor_active:
             perfil_final = "conservador"
