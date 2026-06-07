@@ -4,15 +4,16 @@ la demo M5.
 Cubre cinco capas:
 
 1. Los **20 casos sintéticos** HD/LD/LC/EC del notebook (§6.1) contra
-   ``classify_profile`` — la lógica de fusión portada verbatim (baseline).
+   ``classify_profile`` — la lógica de fusión portada verbatim (baseline histórico).
 2. Los **helpers puros** del puente cuestionario→q_norm y la regla de suelo.
-3. Casos **end-to-end** (profiler simulado sin red): Sofía (texto conservador →
-   Conservador), floor rule, confianza fija "media".
-4. La **fusión mejorada** ``classify_profile_prudence`` (guarda de neutralidad):
-   el NLP solo baja con evidencia de prudencia real; 2 escalones solo con señal
-   negativa fuerte.
-5. El **caso real del PDF** (``caso_erroneo``): agresivo coherente + texto que
-   FinBERT lee neutral → ya NO baja a Conservador (regresión del falso descenso).
+3. Casos **end-to-end** (profiler simulado sin red): el cuestionario decide,
+   el NLP es advisory, floor rule, confianza fija "media".
+4. El modelo de producción ``classify_profile_advisory``: el perfil sale del
+   cuestionario (bandas recalibradas); el NLP NUNCA cambia el perfil, solo marca
+   ``flag_revisar`` ante divergencia notable.
+5. Los **casos reales** de los PDFs (regresión): caso_1 (CFA agresivo + texto
+   neutral → se mantiene Agresivo + aviso) y caso_2 (borderline score 74 →
+   Moderado por recalibración de la banda).
 """
 from __future__ import annotations
 
@@ -24,9 +25,10 @@ from m1_mifid_questionnaire import (
     floor_rule_active,
 )
 from m1_remote_profiling import (
+    AGGRESSIVE_Q_NORM,
     RemoteProfiler,
     classify_profile,
-    classify_profile_prudence,
+    classify_profile_advisory,
 )
 
 # ---------------------------------------------------------------------------
@@ -123,39 +125,46 @@ class _FakeProfiler(RemoteProfiler):
         t = (text_en or "").upper()
         if "CONS" in t:
             return -0.9, 0.95
-        if "MILD" in t:
-            return -0.4, 0.60
         if "AGR" in t:
             return +0.9, 0.95
         return 0.0, 0.50
 
 
-# Cuestionario agresivo SIN floor rule (p5=3, p6=3) — perfil AG01.
+# Cuestionario fuertemente agresivo SIN floor rule (q_norm ≈ 0.93).
 _AGRESIVO = {"p1": 3, "p2": 3, "p3": 3, "p4": 3, "p5": 3, "p6": 3, "p7": 2,
              "p8": 3, "p9": 3, "p10": 3, "p11": 3, "p12": 2}
 
 
-def test_sofia_agresivo_mas_texto_conservador_baja_a_conservador():
-    """El bug original: test agresivo + texto conservador → Conservador."""
-    res = _FakeProfiler().profile_investor_questionnaire(
-        _AGRESIVO, ["CONS", "CONS", "CONS"]
-    )
+def test_agresivo_fuerte_se_mantiene_con_texto_neutral():
+    """q_norm alto (0.93) + texto neutral → Agresivo (el cuestionario decide)."""
+    res = _FakeProfiler().profile_investor_questionnaire(_AGRESIVO, ["x", "y", "z"])
     assert res.perfil_base == "agresivo"
-    assert res.perfil == "Conservador"
-    assert res.escalones_bajados == 2
-    assert res.floor_rule_activa is False
-
-
-def test_agresivo_alineado_se_mantiene():
-    res = _FakeProfiler().profile_investor_questionnaire(
-        _AGRESIVO, ["AGR", "AGR", "AGR"]
-    )
     assert res.perfil == "Agresivo"
     assert res.escalones_bajados == 0
 
 
-def test_floor_rule_domina_pese_a_texto_agresivo():
-    """Capacidad económica grave (p5=1) → Conservador aunque el texto sea eufórico."""
+def test_nlp_es_advisory_no_baja_el_perfil():
+    """El NLP NUNCA cambia el perfil: aun con texto 'conservador' sigue Agresivo,
+    solo marca flag_revisar para revisión humana (FinBERT no es fiable)."""
+    res = _FakeProfiler().profile_investor_questionnaire(
+        _AGRESIVO, ["CONS", "CONS", "CONS"]
+    )
+    assert res.perfil == "Agresivo"          # advisory: el NLP no baja
+    assert res.escalones_bajados == 0
+    assert res.flag_revisar is True          # pero avisa de la divergencia
+
+
+def test_agresivo_alineado_no_marca_aviso():
+    """Texto positivo alineado con cuestionario agresivo → sin aviso."""
+    res = _FakeProfiler().profile_investor_questionnaire(
+        _AGRESIVO, ["AGR", "AGR", "AGR"]
+    )
+    assert res.perfil == "Agresivo"
+    assert res.flag_revisar is False
+
+
+def test_floor_rule_domina():
+    """Capacidad económica grave (p5=1) → Conservador (puerta previa)."""
     closed = dict(_AGRESIVO, p5=1)
     res = _FakeProfiler().profile_investor_questionnaire(closed, ["AGR", "AGR", "AGR"])
     assert res.floor_rule_activa is True
@@ -170,62 +179,55 @@ def test_confianza_siempre_media_en_cloud():
 
 
 # ---------------------------------------------------------------------------
-# 4. Fusión mejorada: classify_profile_prudence (guarda de neutralidad)
+# 4. classify_profile_advisory: el cuestionario decide, el NLP es advisory
 # ---------------------------------------------------------------------------
-def test_prudence_texto_neutral_no_baja_pero_flag():
-    """q agresivo + sentimiento NEUTRAL (0.5) → NO baja; marca flag_revisar."""
-    out = classify_profile_prudence(0.93, 0.50, "media")
-    assert out["escalones_bajados"] == 0
-    assert out["perfil_final"] == "agresivo"
-    assert out["flag_revisar"] is True
+def test_advisory_nunca_cambia_el_perfil():
+    """Pase lo que pase con el sentimiento, perfil_final == perfil_base."""
+    for q in (-0.99, -0.40, 0.0, 0.34, 0.48, 0.93):
+        for sent in (0.0, 0.5, 1.0):
+            out = classify_profile_advisory(q, sent, "media")
+            assert out["escalones_bajados"] == 0
+            assert out["perfil_final"] == out["perfil_base"]
 
 
-def test_prudence_texto_positivo_no_baja_ni_flag():
-    """q agresivo + sentimiento POSITIVO alineado → se mantiene, sin flag."""
-    out = classify_profile_prudence(0.80, 0.85, "media")
-    assert out["escalones_bajados"] == 0
-    assert out["perfil_final"] == "agresivo"
-    assert out["flag_revisar"] is False
+def test_advisory_banda_recalibrada():
+    """Frontera 'agresivo' recalibrada: score 74 (q_norm 0.48) → Moderado."""
+    assert classify_profile_advisory(0.48, 0.5, "media")["perfil_base"] == "moderado"
+    assert classify_profile_advisory(0.93, 0.5, "media")["perfil_base"] == "agresivo"
+    # Justo en la frontera AGGRESSIVE_Q_NORM.
+    assert classify_profile_advisory(AGGRESSIVE_Q_NORM, 0.5, "media")["perfil_base"] == "agresivo"
+    assert classify_profile_advisory(AGGRESSIVE_Q_NORM - 0.01, 0.5, "media")["perfil_base"] == "moderado"
 
 
-def test_prudence_prudente_leve_baja_un_escalon():
-    """q agresivo + prudencia LEVE (norm −0.4) → 1 escalón (no 2)."""
-    out = classify_profile_prudence(0.92, 0.30, "media")  # sentiment_norm = -0.40
-    assert out["escalones_bajados"] == 1
-    assert out["perfil_final"] == "moderado"
-
-
-def test_prudence_prudente_fuerte_baja_dos_escalones():
-    """q agresivo + prudencia FUERTE (norm ≤ −0.6) → 2 escalones."""
-    out = classify_profile_prudence(0.92, 0.05, "media")  # sentiment_norm = -0.90
-    assert out["escalones_bajados"] == 2
-    assert out["perfil_final"] == "conservador"
-
-
-def test_prudence_nunca_sube():
-    """Divergencia negativa (texto más agresivo que el test) nunca sube."""
-    for q in (-0.99, -0.40, 0.0, 0.34):
-        out = classify_profile_prudence(q, 0.99, "alta")
-        assert out["escalones_bajados"] == 0
-        assert out["perfil_final"] == out["perfil_base"]
+def test_advisory_flag_por_divergencia():
+    """El aviso salta con divergencia notable (texto no confirma el cuestionario)."""
+    assert classify_profile_advisory(0.93, 0.5, "media")["flag_revisar"] is True   # div 0.93
+    assert classify_profile_advisory(0.93, 0.95, "media")["flag_revisar"] is False  # alineado
 
 
 # ---------------------------------------------------------------------------
-# 5. Caso REAL del PDF (caso_erroneo): inversor CFA agresivo y coherente,
-#    textos agresivos que FinBERT lee como NEUTRAL (sentiment 0.50).
-#    Antes bajaba 2 escalones a Conservador (falso descenso); ahora se mantiene.
+# 5. Casos REALES de los PDFs (regresión).
 # ---------------------------------------------------------------------------
+# caso_1 (caso_erroneo): CFA agresivo, textos que FinBERT lee neutral.
+# Antes bajaba 2 escalones a Conservador; ahora se mantiene Agresivo + aviso.
 _CFA_AGRESIVO = {"p1": 3, "p2": 2, "p3": 3, "p4": 3, "p5": 3, "p6": 3, "p7": 2,
                  "p8": 3, "p9": 3, "p10": 3, "p11": 3, "p12": 3}
+# caso_2: q_norm ≈ 0.48 (score 74), borderline. Antes Agresivo; ahora Moderado.
+_CASO2 = {"p1": 3, "p2": 2, "p3": 3, "p4": 3, "p5": 3, "p6": 2, "p7": 2,
+          "p8": 3, "p9": 2, "p10": 2, "p11": 2, "p12": 0}
 
 
-def test_caso_pdf_cfa_agresivo_texto_neutral_no_baja():
-    """Regresión del caso_erroneo.pdf: agresivo coherente + texto neutral FinBERT."""
-    res = _FakeProfiler().profile_investor_questionnaire(
-        _CFA_AGRESIVO, ["x", "y", "z"]  # neutral en el FakeProfiler
-    )
-    assert res.perfil_base == "agresivo"
-    assert res.sentiment_score == 0.5
-    assert res.escalones_bajados == 0
+def test_caso1_cfa_agresivo_texto_neutral_se_mantiene():
+    """caso_erroneo.pdf: agresivo fuerte + texto neutral → Agresivo + aviso."""
+    res = _FakeProfiler().profile_investor_questionnaire(_CFA_AGRESIVO, ["x", "y", "z"])
     assert res.perfil == "Agresivo"
-    assert res.flag_revisar is True  # divergencia notable, marcada para revisión
+    assert res.escalones_bajados == 0
+    assert res.flag_revisar is True
+
+
+def test_caso2_borderline_baja_a_moderado_por_banda():
+    """caso_2.pdf: score 74 (q_norm 0.48) borderline → Moderado por recalibración."""
+    res = _FakeProfiler().profile_investor_questionnaire(_CASO2, ["x", "y", "z"])
+    assert round(res.q_norm, 2) == 0.48
+    assert res.floor_rule_activa is False
+    assert res.perfil == "Moderado"
