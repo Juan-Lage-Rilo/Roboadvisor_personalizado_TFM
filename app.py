@@ -387,14 +387,15 @@ if enviado:
 
     c1, c2, c3 = st.columns(3)
     c1.metric(
-        "Perfil base (cuestionario)",
+        "Perfil (cuestionario)",
         result.perfil_base.capitalize(),
-        help="Derivado solo de las 12 preguntas cerradas (q_norm).",
+        help="El cuestionario MiFID (q_norm) decide el perfil. El NLP no lo cambia.",
     )
     c2.metric(
-        "Escalones bajados por NLP",
-        result.escalones_bajados,
-        help="La prudencia asimétrica solo permite bajar, nunca subir.",
+        "Aviso NLP",
+        "Revisar" if result.flag_revisar else "OK",
+        help="Advisory: marca discrepancia cuestionario↔texto para revisión "
+        "humana. No modifica el perfil.",
     )
     c3.metric(
         "Regla de suelo",
@@ -408,28 +409,22 @@ if enviado:
             "en **Conservador** con independencia del resto. Es una salvaguarda "
             "regulatoria (Directrices ESMA)."
         )
-    elif result.escalones_bajados > 0:
-        st.info(
-            f"El análisis de sentimiento ha **bajado** el perfil de "
-            f"*{result.perfil_base}* a *{result.perfil_final}* "
-            f"({result.escalones_bajados} escalón/es): el texto libre es más "
-            f"prudente que las respuestas cerradas (divergencia "
-            f"{result.divergencia:+.2f})."
-        )
     elif result.flag_revisar:
         st.info(
-            "El texto libre **diverge** del cuestionario, pero no aporta "
-            "evidencia de prudencia suficiente para bajar el perfil (texto "
-            "neutral o positivo). Se mantiene el perfil base y se **marca para "
-            "revisión** humana."
+            f"⚠️ **Aviso de consistencia**: el texto libre **diverge** del "
+            f"cuestionario (divergencia {result.divergencia:+.2f}). El perfil lo "
+            f"decide el cuestionario; esta discrepancia se **marca para revisión** "
+            f"humana (el análisis de sentimiento es orientativo, no decisorio)."
         )
 
-    # --- Desglose: fusión por prudencia asimétrica -------------------------
-    with st.expander("¿Por qué este perfil? — fusión por prudencia asimétrica", expanded=True):
+    # --- Desglose: el cuestionario decide, el NLP avisa --------------------
+    with st.expander("¿Por qué este perfil? — el cuestionario decide, el NLP avisa", expanded=True):
         st.markdown(
-            "El cuestionario fija el **perfil base**; el NLP solo puede **bajarlo** "
-            "y **solo si el texto es genuinamente prudente** (no basta con que sea "
-            "neutral). Divergencia = `q_norm − sentiment_norm`."
+            "El **perfil lo fija el cuestionario MiFID** (`q_norm`). El análisis "
+            "de sentimiento es **advisory**: calcula la divergencia "
+            "`q_norm − sentiment_norm` y, si es notable, marca un aviso para "
+            "revisión — pero **no cambia el perfil** (FinBERT mide polaridad de "
+            "noticias, no apetito de riesgo)."
         )
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("q_norm (cuestionario)", f"{result.q_norm:+.2f}", help="Rango [-1, +1].")
