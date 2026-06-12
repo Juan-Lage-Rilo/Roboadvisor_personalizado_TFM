@@ -3,12 +3,12 @@ Demo M5 — Roboadvisor TFM (Streamlit Cloud)
 ===========================================
 Interfaz del módulo M1 (perfilado del inversor). El cuestionario MiFID II
 documentado en ``docs/mifid/`` (12 preguntas cerradas B1–B4 + 3 abiertas)
-alimenta el **modelo canónico de prudencia asimétrica** del notebook M1:
+alimenta el modelo de producción **el cuestionario decide, el NLP avisa**:
 
 - las 12 cerradas producen un ``q_norm`` (Plantilla C sin B5, renormalizado)
-  que fija el **perfil base**;
-- el análisis de sentimiento NLP de las 3 abiertas **solo puede bajar** el
-  perfil (nunca subirlo) vía ``classify_profile``;
+  que fija el **perfil** (bandas recalibradas, ``classify_profile_advisory``);
+- el análisis de sentimiento NLP de las 3 abiertas es **advisory**: solo marca
+  ``flag_revisar`` ante divergencia notable, nunca cambia el perfil;
 - la **regla de suelo** (capacidad económica, P5/P6) actúa como puerta previa.
 
 Todas las preguntas (cerradas y abiertas) son **obligatorias**: el formulario
@@ -294,11 +294,12 @@ with st.form("cuestionario_mifid"):
         st.divider()
 
     # Cambio 2: título descriptivo sin "B5 ·".
-    st.subheader("Análisis de sentimiento (respuestas abiertas)")
+    st.subheader("Cuéntanoslo con tus palabras")
     # Cambio 3: ya no se pueden dejar en blanco.
     st.caption(
-        "Tres preguntas abiertas, cada una procesada con FinBERT vía API. "
-        "Todas son obligatorias."
+        "Tres preguntas para que respondas libremente, con tus palabras. "
+        "Nos ayudan a comprobar que el perfil refleja bien cómo eres como "
+        "inversor. Todas son obligatorias."
     )
     textos: list[str] = []
     for oq in OPEN_QUESTIONS:
@@ -389,13 +390,14 @@ if enviado:
     c1.metric(
         "Perfil (cuestionario)",
         result.perfil_base.capitalize(),
-        help="El cuestionario MiFID (q_norm) decide el perfil. El NLP no lo cambia.",
+        help="El perfil se calcula con las respuestas a las preguntas del "
+        "cuestionario. Es la base de la recomendación.",
     )
     c2.metric(
-        "Aviso NLP",
+        "Revisión de coherencia",
         "Revisar" if result.flag_revisar else "OK",
-        help="Advisory: marca discrepancia cuestionario↔texto para revisión "
-        "humana. No modifica el perfil.",
+        help="Comprobamos si lo que has escrito con tus palabras encaja con "
+        "tus respuestas al cuestionario. Si no encaja, lo revisa una persona.",
     )
     c3.metric(
         "Regla de suelo",
@@ -404,37 +406,55 @@ if enviado:
 
     if result.floor_rule_activa:
         st.warning(
-            "**Regla de suelo activada**: la capacidad económica declarada "
-            "(impacto grave de una pérdida o endeudamiento alto) fija el perfil "
-            "en **Conservador** con independencia del resto. Es una salvaguarda "
-            "regulatoria (Directrices ESMA)."
+            "**Regla de suelo activada**: según tus respuestas, una pérdida "
+            "afectaría seriamente a tu economía (o tu nivel de deudas es alto). "
+            "Por tu protección, la normativa nos obliga a asignarte el perfil "
+            "**Conservador**, aunque el resto de respuestas apunten más alto."
         )
     elif result.flag_revisar:
         st.info(
-            f"⚠️ **Aviso de consistencia**: el texto libre **diverge** del "
-            f"cuestionario (divergencia {result.divergencia:+.2f}). El perfil lo "
-            f"decide el cuestionario; esta discrepancia se **marca para revisión** "
-            f"humana (el análisis de sentimiento es orientativo, no decisorio)."
+            "⚠️ **Lo que has escrito no encaja del todo con tus respuestas al "
+            "cuestionario.** Tu perfil se mantiene (lo determinan tus respuestas "
+            "al test), pero un asesor revisará tu caso para confirmar que la "
+            "recomendación es la adecuada para ti."
         )
 
     # --- Desglose: el cuestionario decide, el NLP avisa --------------------
-    with st.expander("¿Por qué este perfil? — el cuestionario decide, el NLP avisa", expanded=True):
+    with st.expander("¿Por qué este perfil?", expanded=True):
         st.markdown(
-            "El **perfil lo fija el cuestionario MiFID** (`q_norm`). El análisis "
-            "de sentimiento es **advisory**: calcula la divergencia "
-            "`q_norm − sentiment_norm` y, si es notable, marca un aviso para "
-            "revisión — pero **no cambia el perfil** (FinBERT mide polaridad de "
-            "noticias, no apetito de riesgo)."
+            "Tu perfil de riesgo sale de **tus respuestas al cuestionario**: "
+            "tu experiencia, tu situación económica, tus objetivos y cuánto "
+            "riesgo estás dispuesto a asumir.\n\n"
+            "Además, el sistema **lee tus respuestas escritas** y comprueba que "
+            "cuentan lo mismo que el test. Esa lectura automática **no cambia tu "
+            "perfil** — solo sirve para detectar contradicciones: si las hay, una "
+            "persona revisa tu caso antes de confirmar la recomendación."
         )
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("q_norm (cuestionario)", f"{result.q_norm:+.2f}", help="Rango [-1, +1].")
-        m2.metric("Sentimiento NLP", f"{result.sentiment_score:.2f}", help="Rango [0, 1].")
-        m3.metric("Divergencia", f"{result.divergencia:+.2f}")
+        m1.metric(
+            "Puntuación del test",
+            f"{result.q_norm:+.2f}",
+            help="Resumen de tus respuestas al cuestionario, de -1 (muy "
+            "prudente) a +1 (muy decidido a asumir riesgo).",
+        )
+        m2.metric(
+            "Tono del texto",
+            f"{result.sentiment_score:.2f}",
+            help="Lectura automática de tus respuestas escritas, de 0 (tono "
+            "muy prudente) a 1 (tono muy optimista). 0.5 es neutro.",
+        )
+        m3.metric(
+            "Diferencia",
+            f"{result.divergencia:+.2f}",
+            help="Distancia entre lo que dice el test y el tono de tu texto. "
+            "Cuanto mayor, más motivo para que una persona lo revise.",
+        )
         m4.metric(
-            "Confianza NLP",
+            "Fiabilidad de la lectura",
             result.confidence.capitalize(),
-            help="Fijada a 'media': la variante cloud no calcula el agreement "
-            "inter-pipeline (requeriría RoBERTuito, no servido por hf-inference).",
+            help="Cómo de fiable es la lectura automática del texto. En esta "
+            "demo es siempre 'media', por las limitaciones de la versión "
+            "simplificada del análisis.",
         )
         st.table(
             {
@@ -448,9 +468,9 @@ if enviado:
             }
         )
         st.caption(
-            f"Perfil base **{result.perfil_base}** → final **{result.perfil_final}** "
-            f"({result.escalones_bajados} escalón/es). El sentimiento es la media "
-            "del análisis FinBERT de las respuestas abiertas (prob-weighted)."
+            "Puntuaciones de cada bloque del cuestionario, de 0 a 1. El 'tono "
+            "del texto' es el promedio de la lectura automática de tus tres "
+            "respuestas escritas."
         )
 
     with st.expander("Detalle / trazabilidad (JSON)"):
